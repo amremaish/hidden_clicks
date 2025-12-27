@@ -1,28 +1,28 @@
-"""End File Reader action type."""
+"""Image Matcher action type."""
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QDialogButtonBox, QPushButton, QFileDialog, QMessageBox,
-    QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QWidget
+    QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QWidget, QSpinBox
 )
+from PyQt5.QtCore import Qt
 import os
 
 from src.action_types.base import BaseActionType
 from src.ui.icons import get_icon, get_icon_text, get_unicode_icon
 
 
-class EndFileReaderDialog(QDialog):
-    """Dialog for adding an end file reader action"""
-    def __init__(self, parent=None, max_action_count=1):
+class ImageMatcherDialog(QDialog):
+    """Dialog for adding an image matcher action"""
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.max_action_count = max_action_count
         # Lazy import to avoid circular dependency
         from src.action_types.registry import get_action_registry
         self.action_registry = get_action_registry()
         self.true_actions = []
         self.false_actions = []
         self._action_data = None
-        self.setWindowTitle(get_icon_text('list', 'Add End File Reader Action'))
+        self.setWindowTitle(get_icon_text('image', 'Add Image Matcher Action'))
         self.setModal(True)
         self.setFixedSize(600, 700)
         self.setStyleSheet("""
@@ -48,6 +48,23 @@ class EndFileReaderDialog(QDialog):
                 border-color: #42a5f5;
             }
             QLineEdit:focus {
+                border-color: #42a5f5;
+                background-color: #ffffff;
+            }
+            QSpinBox {
+                background-color: #ffffff;
+                border: 2px solid #ccc;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #333;
+                font-size: 12px;
+                min-height: 20px;
+                max-height: 24px;
+            }
+            QSpinBox:hover {
+                border-color: #42a5f5;
+            }
+            QSpinBox:focus {
                 border-color: #42a5f5;
                 background-color: #ffffff;
             }
@@ -132,42 +149,48 @@ class EndFileReaderDialog(QDialog):
         
         # Header with icon
         header_layout = QHBoxLayout()
-        icon_label = QLabel(get_unicode_icon('list'))
+        icon_label = QLabel(get_unicode_icon('image'))
         icon_label.setStyleSheet("font-size: 24px;")
         header_layout.addWidget(icon_label)
-        label = QLabel("Configure End File Reader:")
+        label = QLabel("Configure Image Matcher:")
         label.setStyleSheet("font-size: 13px; font-weight: bold; color: #333;")
         header_layout.addWidget(label)
         header_layout.addStretch()
         layout.addLayout(header_layout)
         
-        # File path input
-        file_path_label = QLabel("File Path:")
-        file_path_label.setStyleSheet("font-size: 12px; color: #333; font-weight: bold;")
-        layout.addWidget(file_path_label)
+        # Image path input
+        image_path_label = QLabel("Template Image Path:")
+        image_path_label.setStyleSheet("font-size: 12px; color: #333; font-weight: bold;")
+        layout.addWidget(image_path_label)
         
-        file_path_layout = QHBoxLayout()
-        self.file_path_input = QLineEdit()
-        self.file_path_input.setPlaceholderText("Enter file path or click Browse...")
-        file_path_layout.addWidget(self.file_path_input)
+        image_path_layout = QHBoxLayout()
+        self.image_path_input = QLineEdit()
+        self.image_path_input.setPlaceholderText("Enter image path or click Browse...")
+        image_path_layout.addWidget(self.image_path_input)
         
         browse_btn = QPushButton("Browse...")
         browse_btn.setFixedWidth(90)
         browse_btn.setFixedHeight(35)
-        browse_btn.clicked.connect(self.browse_file)
-        file_path_layout.addWidget(browse_btn)
-        layout.addLayout(file_path_layout)
+        browse_btn.clicked.connect(self.browse_image)
+        image_path_layout.addWidget(browse_btn)
+        layout.addLayout(image_path_layout)
         
-        # Key text input
-        key_text_label = QLabel("Key Text (to search in last line):")
-        key_text_label.setStyleSheet("font-size: 12px; color: #333; font-weight: bold;")
-        layout.addWidget(key_text_label)
-        self.key_text_input = QLineEdit()
-        self.key_text_input.setPlaceholderText("Enter text to search for")
-        layout.addWidget(self.key_text_input)
+        # Match number input
+        match_number_label = QLabel("Match Number (1 = first match, 2 = second match, etc.):")
+        match_number_label.setStyleSheet("font-size: 12px; color: #333; font-weight: bold;")
+        layout.addWidget(match_number_label)
+        
+        match_number_layout = QHBoxLayout()
+        self.match_number_input = QSpinBox()
+        self.match_number_input.setMinimum(1)
+        self.match_number_input.setMaximum(100)
+        self.match_number_input.setValue(1)
+        match_number_layout.addWidget(self.match_number_input)
+        match_number_layout.addStretch()
+        layout.addLayout(match_number_layout)
         
         # True Actions Section
-        true_group = QGroupBox("True Actions (execute when key text is found)")
+        true_group = QGroupBox("True Actions (execute when image matches)")
         true_layout = QVBoxLayout(true_group)
         true_layout.setContentsMargins(10, 15, 10, 10)
         true_layout.setSpacing(8)
@@ -191,7 +214,7 @@ class EndFileReaderDialog(QDialog):
         layout.addWidget(true_group)
         
         # False Actions Section
-        false_group = QGroupBox("False Actions (execute when key text is NOT found)")
+        false_group = QGroupBox("False Actions (execute when image does NOT match)")
         false_layout = QVBoxLayout(false_group)
         false_layout.setContentsMargins(10, 15, 10, 10)
         false_layout.setSpacing(8)
@@ -239,16 +262,16 @@ class EndFileReaderDialog(QDialog):
         if self._action_data:
             self.load_action_data(self._action_data)
     
-    def browse_file(self):
-        """Open file browser dialog"""
+    def browse_image(self):
+        """Open image file browser dialog"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select File",
+            "Select Template Image",
             "",
-            "All Files (*.*)"
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.gif);;All Files (*.*)"
         )
         if file_path:
-            self.file_path_input.setText(file_path)
+            self.image_path_input.setText(file_path)
     
     def _add_true_action(self):
         """Add an action to the true actions list"""
@@ -289,7 +312,6 @@ class EndFileReaderDialog(QDialog):
         """)
         label.setContentsMargins(0, 0, 0, 0)  # Remove label margins
         label.setWordWrap(False)
-        from PyQt5.QtCore import Qt
         label.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # Align to top
         layout.addWidget(label, 0, Qt.AlignTop)  # Add with stretch factor 0 and top alignment
         
@@ -357,8 +379,8 @@ class EndFileReaderDialog(QDialog):
             if action_type:
                 # Create dialog and populate with existing action data
                 dialog = action_type.create_dialog(self)
-                # Note: Most dialogs don't support editing existing actions yet
-                # For now, we'll remove and re-add
+                if hasattr(dialog, 'load_action_data'):
+                    dialog.load_action_data(action)
                 if dialog.exec_() == QDialog.Accepted:
                     if hasattr(dialog, 'get_action'):
                         new_action = dialog.get_action()
@@ -395,36 +417,46 @@ class EndFileReaderDialog(QDialog):
     
     def validate_and_accept(self):
         """Validate inputs before accepting"""
-        file_path = self.file_path_input.text().strip()
-        key_text = self.key_text_input.text().strip()
+        image_path = self.image_path_input.text().strip()
+        match_number = self.match_number_input.value()
         
-        if not file_path:
-            QMessageBox.warning(self, "Validation Error", "Please enter a file path.")
+        if not image_path:
+            QMessageBox.warning(self, "Validation Error", "Please enter an image path.")
             return
         
-        if not key_text:
-            QMessageBox.warning(self, "Validation Error", "Please enter a key text to search for.")
-            return
-        
-        if not os.path.exists(file_path):
+        if not os.path.exists(image_path):
             reply = QMessageBox.question(
                 self,
                 "File Not Found",
-                f"File not found: {file_path}\nDo you want to continue anyway?",
+                f"Image file not found: {image_path}\nDo you want to continue anyway?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
             if reply == QMessageBox.No:
                 return
         
+        # Check if it's a valid image file
+        valid_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif']
+        if not any(image_path.lower().endswith(ext) for ext in valid_extensions):
+            QMessageBox.warning(
+                self,
+                "Invalid File",
+                "Please select a valid image file (PNG, JPG, JPEG, BMP, or GIF)."
+            )
+            return
+        
+        if match_number < 1:
+            QMessageBox.warning(self, "Validation Error", "Match number must be at least 1.")
+            return
+        
         self.accept()
     
     def get_action(self):
-        """Return the end file reader action dictionary"""
+        """Return the image matcher action dictionary"""
         return {
-            "type": "end_file_reader",
-            "file_path": self.file_path_input.text().strip(),
-            "key_text": self.key_text_input.text().strip(),
+            "type": "image_matcher",
+            "image_path": self.image_path_input.text().strip(),
+            "match_number": self.match_number_input.value(),
             "true_actions": self.true_actions.copy(),
             "false_actions": self.false_actions.copy()
         }
@@ -432,48 +464,46 @@ class EndFileReaderDialog(QDialog):
     def load_action_data(self, action_data):
         """Load existing action data into the dialog (for editing)"""
         self._action_data = action_data
-        self.file_path_input.setText(action_data.get("file_path", ""))
-        self.key_text_input.setText(action_data.get("key_text", ""))
+        self.image_path_input.setText(action_data.get("image_path", ""))
+        self.match_number_input.setValue(action_data.get("match_number", 1))
         self.true_actions = action_data.get("true_actions", []).copy()
         self.false_actions = action_data.get("false_actions", []).copy()
         self._populate_sub_action_list(True)
         self._populate_sub_action_list(False)
-        self.setWindowTitle(get_icon_text('list', 'Edit End File Reader Action'))
+        self.setWindowTitle(get_icon_text('image', 'Edit Image Matcher Action'))
 
 
-class EndFileReaderActionType(BaseActionType):
-    """Action type for end file reader conditional jumps"""
+class ImageMatcherActionType(BaseActionType):
+    """Action type for image matcher conditional actions"""
     
     def get_type_id(self) -> str:
-        return "end_file_reader"
+        return "image_matcher"
     
     def get_display_name(self) -> str:
-        return "End File Reader"
+        return "Image Matcher"
     
     def create_dialog(self, parent=None) -> QDialog:
-        # Get current action count from parent if available
-        max_count = 1
-        if parent and hasattr(parent, 'action_list'):
-            max_count = parent.action_list.count() + 1
-        return EndFileReaderDialog(parent, max_count)
+        return ImageMatcherDialog(parent)
     
     def format_action_display(self, action_data: dict) -> str:
-        file_path = action_data.get("file_path", "")
-        key_text = action_data.get("key_text", "")
+        image_path = action_data.get("image_path", "")
+        match_number = action_data.get("match_number", 1)
         true_actions = action_data.get("true_actions", [])
         false_actions = action_data.get("false_actions", [])
         # Show just filename if path is long
-        filename = os.path.basename(file_path) if file_path else "No file"
+        filename = os.path.basename(image_path) if image_path else "No image"
         true_count = len(true_actions)
         false_count = len(false_actions)
-        return f"End File Reader: {filename} → '{key_text}' → True: {true_count} actions, False: {false_count} actions"
+        return f"Image Matcher: {filename} (match #{match_number}) → True: {true_count} actions, False: {false_count} actions"
     
     def validate_action_data(self, action_data: dict) -> bool:
         return (
-            "file_path" in action_data and
-            "key_text" in action_data and
+            "image_path" in action_data and
+            "match_number" in action_data and
             "true_actions" in action_data and
             "false_actions" in action_data and
+            isinstance(action_data["match_number"], int) and
+            action_data["match_number"] >= 1 and
             isinstance(action_data["true_actions"], list) and
             isinstance(action_data["false_actions"], list)
         )

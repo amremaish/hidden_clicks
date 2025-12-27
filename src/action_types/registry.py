@@ -6,6 +6,7 @@ from src.action_types.left_click import LeftClickActionType
 from src.action_types.double_click import DoubleClickActionType
 from src.action_types.end_file_reader import EndFileReaderActionType
 from src.action_types.hotkey import HotkeyActionType
+from src.action_types.image_matcher import ImageMatcherActionType
 
 
 class ActionTypeRegistry:
@@ -22,6 +23,7 @@ class ActionTypeRegistry:
         self.register(DoubleClickActionType())
         self.register(EndFileReaderActionType())
         self.register(HotkeyActionType())
+        self.register(ImageMatcherActionType())
     
     def register(self, action_type: BaseActionType):
         """Register an action type"""

@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QListWidget, QMessageBox, QDialog, QListWidgetItem,
-    QGroupBox, QFrame, QSizePolicy
+    QGroupBox, QFrame, QSizePolicy, QCheckBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -20,15 +20,26 @@ class ActionListItemWidget(QWidget):
     move_up = pyqtSignal()
     move_down = pyqtSignal()
     remove = pyqtSignal()
+    enabled_changed = pyqtSignal(bool)  # Signal when enabled state changes
     
-    def __init__(self, text, icon_name, parent=None):
+    def __init__(self, text, icon_name, enabled=True, parent=None):
         super().__init__(parent)
-        self.setup_ui(text, icon_name)
+        self.setup_ui(text, icon_name, enabled)
     
-    def setup_ui(self, text, icon_name):
+    def setup_ui(self, text, icon_name, enabled):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(8)
+        
+        # Enable/Disable toggle button with professional styling
+        self.enabled_checkbox = QPushButton()
+        self.enabled_checkbox.setCheckable(True)
+        self.enabled_checkbox.setChecked(enabled)
+        self.enabled_checkbox.setToolTip("Enable/Disable this action")
+        self.enabled_checkbox.setFixedSize(24, 24)
+        self._update_enabled_button_style(enabled)
+        self.enabled_checkbox.toggled.connect(self._on_enabled_toggled)
+        layout.addWidget(self.enabled_checkbox)
         
         # Icon and text
         icon_label = QLabel(get_unicode_icon(icon_name))
@@ -115,13 +126,63 @@ class ActionListItemWidget(QWidget):
         
         self.move_up_btn = move_up_btn
         self.move_down_btn = move_down_btn
+    
+    def _update_enabled_button_style(self, enabled):
+        """Update the enabled/disabled button style"""
+        if enabled:
+            # Enabled state - green with checkmark
+            self.enabled_checkbox.setText("✓")
+            self.enabled_checkbox.setStyleSheet("""
+                QPushButton {
+                    background-color: #4caf50;
+                    color: white;
+                    border: 2px solid #4caf50;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #66bb6a;
+                    border-color: #66bb6a;
+                }
+                QPushButton:pressed {
+                    background-color: #388e3c;
+                    border-color: #388e3c;
+                }
+            """)
+        else:
+            # Disabled state - red with X
+            self.enabled_checkbox.setText("✗")
+            self.enabled_checkbox.setStyleSheet("""
+                QPushButton {
+                    background-color: #f44336;
+                    color: white;
+                    border: 2px solid #d32f2f;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #e53935;
+                    border-color: #c62828;
+                }
+                QPushButton:pressed {
+                    background-color: #d32f2f;
+                    border-color: #b71c1c;
+                }
+            """)
+    
+    def _on_enabled_toggled(self, checked):
+        """Handle enabled/disabled toggle"""
+        self._update_enabled_button_style(checked)
+        self.enabled_changed.emit(checked)
 
 
 class CoordinateCaptureWindow(QWidget):
     def __init__(self, attached_processes):
         super().__init__()
         self.setWindowTitle("Capture Actions")
-        self.setGeometry(600, 300, 800, 650)
+        self.setGeometry(600, 300, 1200, 650)
         self.center_window()
 
         self.attached_processes = attached_processes
@@ -176,13 +237,11 @@ class CoordinateCaptureWindow(QWidget):
         # Get action types from registry
         self.action_registry = get_action_registry()
         self._populate_action_types()
-        self.action_type.setFixedHeight(200)
         # Connect double-click signal
         self.action_type.itemDoubleClicked.connect(self.on_action_type_double_clicked)
-        left_controls.addWidget(self.action_type)
-
-        # Add stretch to push controls to top
-        left_controls.addStretch()
+        # Set size policy to expand vertically
+        self.action_type.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        left_controls.addWidget(self.action_type, 1)  # Add with stretch factor
 
         # --- Right side: Action List
         right_group = QGroupBox()
@@ -215,11 +274,14 @@ class CoordinateCaptureWindow(QWidget):
             }
         """)
         self.action_list.itemDoubleClicked.connect(self.on_action_double_clicked)
-        right_actions.addWidget(self.action_list)
+        # Set size policy to expand vertically
+        self.action_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_actions.addWidget(self.action_list, 1)  # Add with stretch factor
 
         # Add groups to horizontal layout
-        main_horizontal.addWidget(left_group, 1)
-        main_horizontal.addWidget(right_group, 1)
+        # Left (action types): 25%, Right (actions list): 75%
+        main_horizontal.addWidget(left_group, 1)  # 25% of width
+        main_horizontal.addWidget(right_group, 3)  # 75% of width
 
         layout.addLayout(main_horizontal)
 
@@ -317,7 +379,7 @@ class CoordinateCaptureWindow(QWidget):
         # Extract display name (remove icon if present)
         display_name = item.text()
         # Remove icon character if present
-        for icon_name in ['clock', 'mouse', 'list', 'process', 'keyboard']:
+        for icon_name in ['clock', 'mouse', 'list', 'process', 'keyboard', 'image']:
             icon_char = get_unicode_icon(icon_name)
             if icon_char and display_name.startswith(icon_char):
                 display_name = display_name.replace(icon_char, '').strip()
@@ -408,6 +470,12 @@ class CoordinateCaptureWindow(QWidget):
             self._update_move_buttons()
             self.save_actions()
     
+    def toggle_action_enabled(self, row, enabled):
+        """Toggle enabled state of an action"""
+        if 0 <= row < len(self.actions):
+            self.actions[row]["enabled"] = enabled
+            self.save_actions()
+    
     def _rebuild_action_list(self):
         """Rebuild the entire action list"""
         self.action_list.clear()
@@ -493,11 +561,15 @@ class CoordinateCaptureWindow(QWidget):
             'double_click': 'mouse',
             'end_file_reader': 'list',
             'hotkey': 'keyboard',
+            'image_matcher': 'image',
         }
         icon_name = icon_map.get(action_type_id, 'list')
         
+        # Get enabled state (default to True if not set)
+        enabled = action.get("enabled", True)
+        
         # Create custom widget
-        widget = ActionListItemWidget(display_text, icon_name)
+        widget = ActionListItemWidget(display_text, icon_name, enabled)
         
         # Create list item
         item = QListWidgetItem()
@@ -512,6 +584,7 @@ class CoordinateCaptureWindow(QWidget):
         widget.move_up.connect(lambda r=row: self.move_action_up(r))
         widget.move_down.connect(lambda r=row: self.move_action_down(r))
         widget.remove.connect(lambda r=row: self.remove_action(r))
+        widget.enabled_changed.connect(lambda enabled, r=row: self.toggle_action_enabled(r, enabled))
         
         # Update button states after adding
         self._update_move_buttons()

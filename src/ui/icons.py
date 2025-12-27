@@ -30,6 +30,7 @@ ICON_MAPPINGS = {
     'info': (QStyle.SP_MessageBoxInformation, 'ℹ️'),
     'keyboard': (QStyle.SP_FileDialogListView, '⌨️'),
     'hotkey': (QStyle.SP_FileDialogListView, '⌨️'),
+    'image': (QStyle.SP_FileDialogListView, '🖼️'),
 }
 
 

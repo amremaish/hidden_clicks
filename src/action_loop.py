@@ -3,7 +3,13 @@ import time
 import win32con
 import win32gui
 import win32api
+import win32ui
 import keyboard
+import cv2
+import numpy as np
+from PIL import Image
+import ctypes
+from ctypes import wintypes
 
 running_flags = {}
 threads = {}
@@ -25,11 +31,151 @@ def read_file_last_line(file_path):
         return ""
 
 
+def capture_window_screenshot(hwnd):
+    """Capture a screenshot of the specified window using PrintWindow (works even when minimized)"""
+    try:
+        # Get client rectangle (content area of the window)
+        left, top, right, bottom = win32gui.GetClientRect(hwnd)
+        width = right - left
+        height = bottom - top
+        
+        if width == 0 or height == 0:
+            print(f"⚠️ Window has zero size: {width}x{height}")
+            return None
+        
+        # Get device context
+        hwndDC = win32gui.GetWindowDC(hwnd)
+        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
+        
+        # Create bitmap
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(mfcDC, width, height)
+        saveDC.SelectObject(bitmap)
+        
+        # PrintWindow with PW_RENDERFULLCONTENT = 2 (Windows 8+)
+        # This works even when the window is minimized
+        # Call PrintWindow through ctypes since it's not directly available in win32gui
+        user32 = ctypes.windll.user32
+        PW_RENDERFULLCONTENT = 2
+        result = user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), PW_RENDERFULLCONTENT)
+        
+        if not result:
+            print(f"⚠️ PrintWindow failed for window {hwnd}")
+            # Cleanup
+            win32gui.DeleteObject(bitmap.GetHandle())
+            saveDC.DeleteDC()
+            mfcDC.DeleteDC()
+            win32gui.ReleaseDC(hwnd, hwndDC)
+            return None
+        
+        # Get bitmap data
+        bmpinfo = bitmap.GetInfo()
+        bmpstr = bitmap.GetBitmapBits(True)
+        
+        # Convert to PIL Image
+        img = Image.frombuffer(
+            "RGB",
+            (bmpinfo["bmWidth"], bmpinfo["bmHeight"]),
+            bmpstr,
+            "raw",
+            "BGRX",
+            0,
+            1
+        )
+        
+        # Convert PIL Image to numpy array for OpenCV
+        screenshot_np = np.array(img)
+        # Convert RGB to BGR for OpenCV
+        screenshot_bgr = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
+        
+        # Cleanup
+        win32gui.DeleteObject(bitmap.GetHandle())
+        saveDC.DeleteDC()
+        mfcDC.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwndDC)
+        
+        return screenshot_bgr
+    except Exception as e:
+        print(f"⚠️ Error capturing screenshot: {e}")
+        return None
+
+
+def match_template_image(screenshot, template_path, match_number=1, threshold=0.99):
+    """Match a template image in the screenshot and return the nth match location
+    
+    Args:
+        screenshot: Screenshot image as numpy array (BGR format)
+        template_path: Path to the template image file
+        match_number: Which match to return (1 = first, 2 = second, etc.)
+        threshold: Matching threshold (0.0 to 1.0)
+    
+    Returns:
+        Tuple (x, y) of the match location, or None if not found
+    """
+    try:
+        # Load template image
+        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        if template is None:
+            print(f"⚠️ Could not load template image: {template_path}")
+            return None
+        
+        # Convert both to grayscale for better matching
+        screenshot_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+        template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+        
+        # Perform template matching
+        result = cv2.matchTemplate(screenshot_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+        
+        # Find all locations where the result exceeds the threshold
+        locations = np.where(result >= threshold)
+        
+        # Get all matches with their confidence scores
+        matches = []
+        for pt in zip(*locations[::-1]):  # Switch x and y coordinates
+            confidence = result[pt[1], pt[0]]
+            matches.append((pt[0], pt[1], confidence))
+        
+        # Sort by confidence (highest first)
+        matches.sort(key=lambda x: x[2], reverse=True)
+        
+        # Remove overlapping matches (non-maximum suppression)
+        filtered_matches = []
+        for match in matches:
+            x, y, conf = match
+            # Check if this match overlaps with any existing match
+            overlap = False
+            for existing_x, existing_y, _ in filtered_matches:
+                # If matches are within 20 pixels of each other, consider them overlapping
+                if abs(x - existing_x) < 20 and abs(y - existing_y) < 20:
+                    overlap = True
+                    break
+            if not overlap:
+                filtered_matches.append((x, y, conf))
+        
+        # Return the nth match (1-indexed)
+        if len(filtered_matches) >= match_number:
+            x, y, confidence = filtered_matches[match_number - 1]
+            print(f"🖼️ Image match #{match_number} found at ({x}, {y}) with confidence {confidence:.2f}")
+            return (x, y)
+        else:
+            print(f"🖼️ Image match #{match_number} not found (found {len(filtered_matches)} matches)")
+            return None
+            
+    except Exception as e:
+        print(f"⚠️ Error matching template image: {e}")
+        return None
+
+
 def execute_actions(actions, hwnd):
     """Execute a list of actions sequentially"""
     for action in actions:
         if not running_flags.get(hwnd, False):
             break
+        
+        # Skip disabled actions
+        if not action.get("enabled", True):
+            continue
         
         if action["type"] == "left_click":
             send_left_click(hwnd, action["x"], action["y"])
@@ -57,6 +203,29 @@ def execute_actions(actions, hwnd):
                 if key_text in last_line:
                     execute_actions(true_actions, hwnd)
                 else:
+                    execute_actions(false_actions, hwnd)
+        elif action["type"] == "image_matcher":
+            # Handle image matcher conditional actions
+            image_path = action.get("image_path", "")
+            match_number = action.get("match_number", 1)
+            true_actions = action.get("true_actions", [])
+            false_actions = action.get("false_actions", [])
+            
+            if image_path:
+                # Capture screenshot of the window
+                screenshot = capture_window_screenshot(hwnd)
+                if screenshot is not None:
+                    # Try to match the template
+                    match_location = match_template_image(screenshot, image_path, match_number)
+                    if match_location is not None:
+                        # Image matched - execute true actions
+                        execute_actions(true_actions, hwnd)
+                    else:
+                        # Image did not match - execute false actions
+                        execute_actions(false_actions, hwnd)
+                else:
+                    # Screenshot failed - execute false actions
+                    print(f"⚠️ Screenshot capture failed, executing false actions")
                     execute_actions(false_actions, hwnd)
 
 
@@ -88,6 +257,12 @@ def loop_for_process(name, hwnd, actions):
                 action = actions[action_index]
                 next_index = action_index + 1  # Default: move to next action
                 
+                # Skip disabled actions
+                if not action.get("enabled", True):
+                    action_index = next_index
+                    cycle_count += 1
+                    continue
+                
                 if action["type"] == "left_click":
                     send_left_click(hwnd, action["x"], action["y"])
                 elif action["type"] == "double_click":
@@ -118,6 +293,32 @@ def loop_for_process(name, hwnd, actions):
                         else:
                             # Execute false actions
                             print(f"✗ Key text '{key_text}' not found in {file_path}, executing {len(false_actions)} false actions")
+                            execute_actions(false_actions, hwnd)
+                    # Continue to next action after sub actions complete
+                elif action["type"] == "image_matcher":
+                    # Capture screenshot and match template image
+                    image_path = action.get("image_path", "")
+                    match_number = action.get("match_number", 1)
+                    true_actions = action.get("true_actions", [])
+                    false_actions = action.get("false_actions", [])
+                    
+                    if image_path:
+                        # Capture screenshot of the window
+                        screenshot = capture_window_screenshot(hwnd)
+                        if screenshot is not None:
+                            # Try to match the template
+                            match_location = match_template_image(screenshot, image_path, match_number)
+                            if match_location is not None:
+                                # Image matched - execute true actions
+                                print(f"✓ Image match #{match_number} found in {image_path}, executing {len(true_actions)} true actions")
+                                execute_actions(true_actions, hwnd)
+                            else:
+                                # Image did not match - execute false actions
+                                print(f"✗ Image match #{match_number} not found in {image_path}, executing {len(false_actions)} false actions")
+                                execute_actions(false_actions, hwnd)
+                        else:
+                            # Screenshot failed - execute false actions
+                            print(f"⚠️ Screenshot capture failed, executing {len(false_actions)} false actions")
                             execute_actions(false_actions, hwnd)
                     # Continue to next action after sub actions complete
                 
