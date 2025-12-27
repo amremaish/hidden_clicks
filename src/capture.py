@@ -1,105 +1,307 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QListWidget, QComboBox, QSpinBox, QMessageBox
+    QScrollArea, QListWidget, QMessageBox, QDialog, QListWidgetItem,
+    QGroupBox, QFrame, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer
-import threading
-import queue
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QIcon
 import json
 import os
-from pynput import mouse
 
 from src.action_loop import start_threads_for_all
+from src.action_types import get_action_registry
+from src.ui.icons import get_icon, get_icon_text, get_unicode_icon
 
 ACTIONS_PATH = "actions.json"
+
+
+class ActionListItemWidget(QWidget):
+    """Custom widget for action list items with move up/down and remove buttons"""
+    move_up = pyqtSignal()
+    move_down = pyqtSignal()
+    remove = pyqtSignal()
+    
+    def __init__(self, text, icon_name, parent=None):
+        super().__init__(parent)
+        self.setup_ui(text, icon_name)
+    
+    def setup_ui(self, text, icon_name):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(8)
+        
+        # Icon and text
+        icon_label = QLabel(get_unicode_icon(icon_name))
+        icon_label.setStyleSheet("font-size: 16px;")
+        layout.addWidget(icon_label)
+        
+        text_label = QLabel(text)
+        text_label.setStyleSheet("color: #333; font-size: 12px;")
+        text_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout.addWidget(text_label)
+        
+        # Buttons
+        move_up_btn = QPushButton("↑")
+        move_up_btn.setToolTip("Move up")
+        move_up_btn.setFixedSize(30, 25)
+        move_up_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #42a5f5;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #64b5f6;
+            }
+            QPushButton:pressed {
+                background-color: #2196f3;
+            }
+            QPushButton:disabled {
+                background-color: #ccc;
+                color: #888;
+            }
+        """)
+        move_up_btn.clicked.connect(self.move_up.emit)
+        
+        move_down_btn = QPushButton("↓")
+        move_down_btn.setToolTip("Move down")
+        move_down_btn.setFixedSize(30, 25)
+        move_down_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #42a5f5;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #64b5f6;
+            }
+            QPushButton:pressed {
+                background-color: #2196f3;
+            }
+            QPushButton:disabled {
+                background-color: #ccc;
+                color: #888;
+            }
+        """)
+        move_down_btn.clicked.connect(self.move_down.emit)
+        
+        remove_btn = QPushButton(get_unicode_icon('remove'))
+        remove_btn.setToolTip("Remove")
+        remove_btn.setFixedSize(30, 25)
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #d32f2f;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #f44336;
+            }
+            QPushButton:pressed {
+                background-color: #b71c1c;
+            }
+        """)
+        remove_btn.clicked.connect(self.remove.emit)
+        
+        layout.addWidget(move_up_btn)
+        layout.addWidget(move_down_btn)
+        layout.addWidget(remove_btn)
+        
+        self.move_up_btn = move_up_btn
+        self.move_down_btn = move_down_btn
 
 
 class CoordinateCaptureWindow(QWidget):
     def __init__(self, attached_processes):
         super().__init__()
         self.setWindowTitle("Capture Actions")
-        self.setGeometry(600, 300, 600, 650)
+        self.setGeometry(600, 300, 800, 650)
         self.center_window()
 
-        self.coord_queue = queue.Queue()
         self.attached_processes = attached_processes
         self.running = False
         self.actions = []
         self.window_titles = [name for name, hwnd, base in self.attached_processes]
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(12)
 
-        # --- Label: Processes
-        processes_label = QLabel("Processes:")
-        layout.addWidget(processes_label)
+        # --- Main horizontal split: Left controls and Right action list
+        main_horizontal = QHBoxLayout()
+        main_horizontal.setSpacing(15)
 
-        # --- Scrollable process names
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFixedHeight(100)
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setAlignment(Qt.AlignTop)
+        # --- Left side: Action controls
+        left_group = QGroupBox()
+        left_group.setTitle(get_icon_text('add', 'Action Types'))
+        left_controls = QVBoxLayout(left_group)
+        left_controls.setContentsMargins(10, 15, 10, 10)
+        left_controls.setSpacing(10)
 
-        all_titles = "<br>".join(f"• {title}" for title in self.window_titles)
-        label = QLabel(all_titles)
-        label.setStyleSheet("font-size: 11px; color: #ccc;")
-        label.setTextFormat(Qt.RichText)
-        label.setWordWrap(True)
+        # Action type list
+        action_type_label = QLabel(get_icon_text('info', 'Double-click an action type to add it'))
+        action_type_label.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
+        left_controls.addWidget(action_type_label)
+        
+        self.action_type = QListWidget()
+        self.action_type.setSelectionMode(QListWidget.SingleSelection)
+        self.action_type.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background-color: #f0f0f0;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-radius: 3px;
+                margin: 2px;
+                color: #333;
+            }
+            QListWidget::item:hover {
+                background-color: #e3f2fd;
+            }
+            QListWidget::item:selected {
+                background-color: #42a5f5;
+                color: white;
+            }
+        """)
+        
+        # Get action types from registry
+        self.action_registry = get_action_registry()
+        self._populate_action_types()
+        self.action_type.setFixedHeight(200)
+        # Connect double-click signal
+        self.action_type.itemDoubleClicked.connect(self.on_action_type_double_clicked)
+        left_controls.addWidget(self.action_type)
 
-        scroll_layout.addWidget(label)
-        scroll_layout.addStretch()
-        scroll_area.setWidget(scroll_widget)
-        layout.addWidget(scroll_area)
+        # Add stretch to push controls to top
+        left_controls.addStretch()
 
-        # --- Action List
-        layout.addWidget(QLabel("Action List:"))
+        # --- Right side: Action List
+        right_group = QGroupBox()
+        right_group.setTitle(get_icon_text('list', 'Action Sequence'))
+        right_actions = QVBoxLayout(right_group)
+        right_actions.setContentsMargins(10, 15, 10, 10)
+        right_actions.setSpacing(10)
+        
+        action_list_info = QLabel(get_icon_text('info', 'Actions will execute in order'))
+        action_list_info.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
+        right_actions.addWidget(action_list_info)
+        
         self.action_list = QListWidget()
-        layout.addWidget(self.action_list)
+        self.action_list.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background-color: #f0f0f0;
+                padding: 5px;
+            }
+            QListWidget::item {
+                border-radius: 3px;
+                margin: 2px;
+            }
+            QListWidget::item:hover {
+                background-color: #e3f2fd;
+            }
+            QListWidget::item:selected {
+                background-color: #e3f2fd;
+            }
+        """)
+        right_actions.addWidget(self.action_list)
 
-        # --- Action controls
-        action_row = QHBoxLayout()
-        self.action_type = QComboBox()
-        self.action_type.addItems(["Left Click", "Double Click", "Delay"])
+        # Add groups to horizontal layout
+        main_horizontal.addWidget(left_group, 1)
+        main_horizontal.addWidget(right_group, 1)
 
-        self.delay_input = QSpinBox()
-        self.delay_input.setRange(10, 10000)
-        self.delay_input.setValue(300)
-        self.delay_input.setSuffix(" ms")
-        self.delay_input.setFixedWidth(100)
-
-        add_button = QPushButton("Add Action")
-        add_button.clicked.connect(self.capture_action_location)
-
-        action_row.addWidget(self.action_type)
-        action_row.addWidget(self.delay_input)
-        action_row.addWidget(add_button)
-        layout.addLayout(action_row)
-
-        # --- Remove selected
-        remove_btn = QPushButton("Remove Selected Action")
-        remove_btn.clicked.connect(self.remove_action)
-        layout.addWidget(remove_btn)
+        layout.addLayout(main_horizontal)
 
         # --- Start button
-        self.start_button = QPushButton("Start")
-        self.start_button.setStyleSheet("background-color: #067c33; color: white; font-weight: bold;")
-        self.start_button.setMinimumHeight(40)
+        self.start_button = QPushButton(get_icon_text('play', 'Start Automation'))
+        self.start_button.setIcon(get_icon('play'))
+        self.start_button.setStyleSheet("""
+            QPushButton {
+                background-color: #067c33;
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #0a9d47;
+            }
+            QPushButton:pressed {
+                background-color: #055a26;
+            }
+            QPushButton:disabled {
+                background-color: #555;
+                color: #888;
+            }
+        """)
+        self.start_button.setMinimumHeight(45)
         self.start_button.clicked.connect(self.start_loop)
         layout.addWidget(self.start_button)
 
         # --- Hint
-        hint_label = QLabel("Press F7 to pause & F8 to continue.")
-        hint_label.setStyleSheet("color: orange; font-size: 11px; padding-left: 10px;")
+        hint_label = QLabel(get_icon_text('info', 'Press F7 to pause & F8 to continue'))
+        hint_label.setStyleSheet("color: #ff9800; font-size: 11px; padding: 8px; background-color: #fff3e0; border: 1px solid #ffb74d; border-radius: 4px;")
         layout.addWidget(hint_label)
+        
+        # --- Processes at bottom (comma-separated)
+        processes_text = ", ".join(self.window_titles)
+        processes_label = QLabel(f"Attached processes: {processes_text}")
+        processes_label.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
+        processes_label.setWordWrap(True)
+        layout.addWidget(processes_label)
+        
+        # Apply group box styling
+        self._apply_group_box_styling()
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.check_queue)
-        self.timer.start(100)
 
         self.load_actions()
+
+    def _apply_group_box_styling(self):
+        """Apply consistent styling to all group boxes"""
+        group_style = """
+            QGroupBox {
+                font-weight: bold;
+                font-size: 12px;
+                border: 2px solid #ccc;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: #f5f5f5;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+                color: #1976d2;
+            }
+        """
+        for widget in self.findChildren(QGroupBox):
+            widget.setStyleSheet(group_style)
+
+    def _populate_action_types(self):
+        """Populate action type list with icons"""
+        icon_map = {
+            'Delay': 'clock',
+            'Left Click': 'mouse',
+            'Double Click': 'mouse',
+        }
+        
+        for display_name in self.action_registry.get_all_display_names():
+            item = QListWidgetItem(get_icon_text(icon_map.get(display_name, 'list'), display_name))
+            item.setIcon(get_icon(icon_map.get(display_name, 'list')))
+            self.action_type.addItem(item)
 
     def center_window(self):
         frame = self.frameGeometry()
@@ -107,59 +309,107 @@ class CoordinateCaptureWindow(QWidget):
         frame.moveCenter(screen_center)
         self.move(frame.topLeft())
 
-    def capture_action_location(self):
-        import win32con, ctypes
-
-        action_type = self.action_type.currentText()
-        if action_type == "Delay":
-            delay = self.delay_input.value()
-            self.actions.append({"type": "delay", "ms": delay})
-            self.action_list.addItem(f"Delay {delay} ms")
-            self.save_actions()
+    def on_action_type_double_clicked(self, item):
+        """Handle double-click on action type - open appropriate dialog"""
+        # Extract display name (remove icon if present)
+        display_name = item.text()
+        # Remove icon character if present
+        for icon_name in ['clock', 'mouse', 'list']:
+            icon_char = get_unicode_icon(icon_name)
+            if icon_char and display_name.startswith(icon_char):
+                display_name = display_name.replace(icon_char, '').strip()
+                break
+        
+        action_type = self.action_registry.get_by_display_name(display_name)
+        
+        if action_type is None:
+            QMessageBox.warning(self, "Error", f"Unknown action type: {display_name}")
             return
+        
+        # Create dialog for this action type
+        dialog = action_type.create_dialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Get action data from dialog
+            if hasattr(dialog, 'get_action'):
+                action = dialog.get_action()
+                if action and action_type.validate_action_data(action):
+                    self.actions.append(action)
+                    display_text = action_type.format_action_display(action)
+                    self._add_action_to_list(action, display_text)
+                    self.save_actions()
+                else:
+                    QMessageBox.warning(self, "Error", "Invalid action data")
 
-        QMessageBox.information(self, "Click", f"Click anywhere to capture coordinates for {action_type}.")
-
-        def click_listener():
-            ctypes.windll.user32.SetSystemCursor(
-                ctypes.windll.user32.LoadCursorW(0, win32con.IDC_CROSS), 32512
-            )
-
-            def on_click(x, y, button, pressed):
-                if pressed:
-                    ctypes.windll.user32.SystemParametersInfoW(87, 0, None, 0)
-                    self.coord_queue.put((action_type.lower().replace(" ", "_"), x, y))
-                    return False
-
-            with mouse.Listener(on_click=on_click) as listener:
-                listener.join()
-
-        threading.Thread(target=click_listener, daemon=True).start()
-
-    def check_queue(self):
-        try:
-            while True:
-                action_type, x, y = self.coord_queue.get_nowait()
-                action = {"type": action_type, "x": x, "y": y}
-                self.actions.append(action)
-                self.action_list.addItem(f"{action_type.replace('_', ' ').title()} at ({x}, {y})")
-                self.save_actions()
-        except queue.Empty:
-            pass
-
-    def remove_action(self):
-        row = self.action_list.currentRow()
-        if row >= 0:
+    def remove_action(self, row):
+        """Remove action at specified row"""
+        if 0 <= row < len(self.actions):
             self.action_list.takeItem(row)
             self.actions.pop(row)
             self.save_actions()
+            self._update_move_buttons()
+    
+    def move_action_up(self, row):
+        """Move action up in the list"""
+        if row > 0:
+            # Swap actions
+            self.actions[row], self.actions[row - 1] = self.actions[row - 1], self.actions[row]
+            # Rebuild the list
+            self._rebuild_action_list()
+            self._update_move_buttons()
+            self.save_actions()
+    
+    def move_action_down(self, row):
+        """Move action down in the list"""
+        if row < len(self.actions) - 1:
+            # Swap actions
+            self.actions[row], self.actions[row + 1] = self.actions[row + 1], self.actions[row]
+            # Rebuild the list
+            self._rebuild_action_list()
+            self._update_move_buttons()
+            self.save_actions()
+    
+    def _rebuild_action_list(self):
+        """Rebuild the entire action list"""
+        self.action_list.clear()
+        for action in self.actions:
+            action_type = self.action_registry.get_by_type_id(action.get("type", ""))
+            if action_type:
+                display_text = action_type.format_action_display(action)
+                self._add_action_to_list(action, display_text)
+    
+    def _update_move_buttons(self):
+        """Update move up/down button states based on position"""
+        for i in range(self.action_list.count()):
+            item = self.action_list.item(i)
+            widget = self.action_list.itemWidget(item)
+            if widget:
+                # Enable/disable move up button
+                widget.move_up_btn.setEnabled(i > 0)
+                # Enable/disable move down button
+                widget.move_down_btn.setEnabled(i < self.action_list.count() - 1)
 
     def start_loop(self):
         if self.running:
             return
         self.running = True
         self.start_button.setEnabled(False)
-        self.start_button.setStyleSheet("background-color: #067c33; color: white; font-weight: bold;")
+        self.start_button.setText(get_icon_text('stop', 'Running...'))
+        self.start_button.setIcon(get_icon('stop'))
+        self.start_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f57c00;
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:disabled {
+                background-color: #f57c00;
+                color: white;
+            }
+        """)
         start_threads_for_all(self.attached_processes, self.actions)
 
     def save_actions(self):
@@ -176,11 +426,50 @@ class CoordinateCaptureWindow(QWidget):
             with open(ACTIONS_PATH, "r") as f:
                 self.actions = json.load(f)
             for action in self.actions:
-                if action["type"] == "delay":
-                    self.action_list.addItem(f"Delay {action['ms']} ms")
+                action_type = self.action_registry.get_by_type_id(action.get("type", ""))
+                if action_type:
+                    display_text = action_type.format_action_display(action)
+                    self._add_action_to_list(action, display_text)
                 else:
-                    self.action_list.addItem(
-                        f"{action['type'].replace('_', ' ').title()} at ({action['x']}, {action['y']})"
-                    )
+                    # Fallback for unknown action types
+                    action_type_str = action.get("type", "unknown")
+                    widget = ActionListItemWidget(f"Unknown action: {action_type_str}", 'warning')
+                    item = QListWidgetItem()
+                    item.setSizeHint(widget.sizeHint())
+                    self.action_list.addItem(item)
+                    self.action_list.setItemWidget(item, widget)
+                    row = self.action_list.count() - 1
+                    widget.remove.connect(lambda r=row: self.remove_action(r))
+                    self._update_move_buttons()
         except Exception as e:
             print(f"❌ Failed to load actions: {e}")
+    
+    def _add_action_to_list(self, action, display_text):
+        """Add an action to the list with appropriate icon and buttons"""
+        action_type_id = action.get("type", "")
+        icon_map = {
+            'delay': 'clock',
+            'left_click': 'mouse',
+            'double_click': 'mouse',
+        }
+        icon_name = icon_map.get(action_type_id, 'list')
+        
+        # Create custom widget
+        widget = ActionListItemWidget(display_text, icon_name)
+        
+        # Create list item
+        item = QListWidgetItem()
+        item.setSizeHint(widget.sizeHint())
+        
+        # Add to list first to get the correct row
+        self.action_list.addItem(item)
+        self.action_list.setItemWidget(item, widget)
+        row = self.action_list.count() - 1  # Current row index
+        
+        # Connect signals with proper row capture using default parameter
+        widget.move_up.connect(lambda r=row: self.move_action_up(r))
+        widget.move_down.connect(lambda r=row: self.move_action_down(r))
+        widget.remove.connect(lambda r=row: self.remove_action(r))
+        
+        # Update button states after adding
+        self._update_move_buttons()
