@@ -28,6 +28,8 @@ ICON_MAPPINGS = {
     'cancel': (QStyle.SP_DialogCancelButton, '✗'),
     'warning': (QStyle.SP_MessageBoxWarning, '⚠️'),
     'info': (QStyle.SP_MessageBoxInformation, 'ℹ️'),
+    'keyboard': (QStyle.SP_FileDialogListView, '⌨️'),
+    'hotkey': (QStyle.SP_FileDialogListView, '⌨️'),
 }
 
 

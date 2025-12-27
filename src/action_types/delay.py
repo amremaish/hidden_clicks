@@ -13,6 +13,7 @@ class DelayActionDialog(QDialog):
         self.setWindowTitle(get_icon_text('clock', 'Add Delay Action'))
         self.setModal(True)
         self.setFixedSize(350, 180)
+        self._action_data = None
         self.setStyleSheet("""
             QDialog {
                 background-color: #f5f5f5;
@@ -94,6 +95,13 @@ class DelayActionDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
         
+    def load_action_data(self, action_data):
+        """Load existing action data into the dialog"""
+        self._action_data = action_data
+        if "ms" in action_data:
+            self.delay_input.setValue(action_data["ms"])
+        self.setWindowTitle(get_icon_text('clock', 'Edit Delay Action'))
+    
     def get_action(self):
         """Return the delay action dictionary"""
         return {"type": "delay", "ms": self.delay_input.value()}

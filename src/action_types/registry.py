@@ -4,6 +4,8 @@ from src.action_types.base import BaseActionType
 from src.action_types.delay import DelayActionType
 from src.action_types.left_click import LeftClickActionType
 from src.action_types.double_click import DoubleClickActionType
+from src.action_types.end_file_reader import EndFileReaderActionType
+from src.action_types.hotkey import HotkeyActionType
 
 
 class ActionTypeRegistry:
@@ -18,6 +20,8 @@ class ActionTypeRegistry:
         self.register(DelayActionType())
         self.register(LeftClickActionType())
         self.register(DoubleClickActionType())
+        self.register(EndFileReaderActionType())
+        self.register(HotkeyActionType())
     
     def register(self, action_type: BaseActionType):
         """Register an action type"""

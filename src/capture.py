@@ -214,6 +214,7 @@ class CoordinateCaptureWindow(QWidget):
                 background-color: #e3f2fd;
             }
         """)
+        self.action_list.itemDoubleClicked.connect(self.on_action_double_clicked)
         right_actions.addWidget(self.action_list)
 
         # Add groups to horizontal layout
@@ -296,6 +297,8 @@ class CoordinateCaptureWindow(QWidget):
             'Delay': 'clock',
             'Left Click': 'mouse',
             'Double Click': 'mouse',
+            'End File Reader': 'list',
+            'Hotkey': 'keyboard',
         }
         
         for display_name in self.action_registry.get_all_display_names():
@@ -314,7 +317,7 @@ class CoordinateCaptureWindow(QWidget):
         # Extract display name (remove icon if present)
         display_name = item.text()
         # Remove icon character if present
-        for icon_name in ['clock', 'mouse', 'list']:
+        for icon_name in ['clock', 'mouse', 'list', 'process', 'keyboard']:
             icon_char = get_unicode_icon(icon_name)
             if icon_char and display_name.startswith(icon_char):
                 display_name = display_name.replace(icon_char, '').strip()
@@ -327,7 +330,11 @@ class CoordinateCaptureWindow(QWidget):
             return
         
         # Create dialog for this action type
+        # Update max action count for dialogs that need it (like End File Reader)
         dialog = action_type.create_dialog(self)
+        if hasattr(dialog, 'update_max_action_count'):
+            dialog.update_max_action_count(self.action_list.count() + 1)
+        
         if dialog.exec_() == QDialog.Accepted:
             # Get action data from dialog
             if hasattr(dialog, 'get_action'):
@@ -339,6 +346,39 @@ class CoordinateCaptureWindow(QWidget):
                     self.save_actions()
                 else:
                     QMessageBox.warning(self, "Error", "Invalid action data")
+    
+    def on_action_double_clicked(self, item):
+        """Handle double-click on action in the list - edit the action"""
+        row = self.action_list.row(item)
+        if 0 <= row < len(self.actions):
+            action = self.actions[row]
+            action_type = self.action_registry.get_by_type_id(action.get("type", ""))
+            
+            if action_type is None:
+                QMessageBox.warning(self, "Error", f"Unknown action type: {action.get('type', '')}")
+                return
+            
+            # Create dialog for editing
+            dialog = action_type.create_dialog(self)
+            
+            # Load existing action data into dialog if supported
+            if hasattr(dialog, 'load_action_data'):
+                dialog.load_action_data(action)
+            elif hasattr(dialog, 'update_max_action_count'):
+                dialog.update_max_action_count(self.action_list.count())
+            
+            if dialog.exec_() == QDialog.Accepted:
+                # Get updated action data from dialog
+                if hasattr(dialog, 'get_action'):
+                    updated_action = dialog.get_action()
+                    if updated_action and action_type.validate_action_data(updated_action):
+                        # Update the action
+                        self.actions[row] = updated_action
+                        # Rebuild the list to show updated display
+                        self._rebuild_action_list()
+                        self.save_actions()
+                    else:
+                        QMessageBox.warning(self, "Error", "Invalid action data")
 
     def remove_action(self, row):
         """Remove action at specified row"""
@@ -451,6 +491,8 @@ class CoordinateCaptureWindow(QWidget):
             'delay': 'clock',
             'left_click': 'mouse',
             'double_click': 'mouse',
+            'end_file_reader': 'list',
+            'hotkey': 'keyboard',
         }
         icon_name = icon_map.get(action_type_id, 'list')
         

@@ -20,6 +20,7 @@ class ClickActionDialog(QDialog):
         self.action_type_id = action_type_id
         self.captured_coords = None
         self.listener = None
+        self._action_data = None
         
         # Signal for thread-safe UI updates
         self.signal = CoordinateSignal()
@@ -123,8 +124,12 @@ class ClickActionDialog(QDialog):
         button_layout.addWidget(self.cancel_button)
         layout.addLayout(button_layout)
         
-        # Start coordinate capture
-        self.start_capture()
+        # Load action data if provided (for editing)
+        if self._action_data:
+            self.load_action_data(self._action_data)
+        else:
+            # Start coordinate capture only if not editing
+            self.start_capture()
         
     def start_capture(self):
         """Start the mouse listener to capture coordinates"""
@@ -165,6 +170,21 @@ class ClickActionDialog(QDialog):
         ctypes.windll.user32.SystemParametersInfoW(87, 0, None, 0)
         super().closeEvent(event)
         
+    def load_action_data(self, action_data):
+        """Load existing action data into the dialog"""
+        self._action_data = action_data
+        if "x" in action_data and "y" in action_data:
+            self.captured_coords = (action_data["x"], action_data["y"])
+            self.coords_label.setText(f"Coordinates: ({action_data['x']}, {action_data['y']})")
+            self.instructions_label.setText("Click 'Add to Actions' to save changes, or click on screen to capture new coordinates.")
+            self.instructions_label.setStyleSheet("font-size: 13px; color: #333;")
+            self.add_button.setEnabled(True)
+            self.add_button.setText(get_icon_text('ok', 'Update Action'))
+            action_name = self.action_type_id.replace("_", " ").title()
+            self.setWindowTitle(get_icon_text('mouse', f"Edit {action_name} Action"))
+            # Still allow capturing new coordinates
+            self.start_capture()
+    
     def get_action(self):
         """Return the click action dictionary"""
         if self.captured_coords:
