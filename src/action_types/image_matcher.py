@@ -189,6 +189,20 @@ class ImageMatcherDialog(QDialog):
         match_number_layout.addStretch()
         layout.addLayout(match_number_layout)
         
+        # Threshold input
+        threshold_label = QLabel("Threshold (0-100, higher = stricter matching):")
+        threshold_label.setStyleSheet("font-size: 12px; color: #333; font-weight: bold;")
+        layout.addWidget(threshold_label)
+        
+        threshold_layout = QHBoxLayout()
+        self.threshold_input = QSpinBox()
+        self.threshold_input.setMinimum(0)
+        self.threshold_input.setMaximum(100)
+        self.threshold_input.setValue(99)  # Default to 99 (0.99)
+        threshold_layout.addWidget(self.threshold_input)
+        threshold_layout.addStretch()
+        layout.addLayout(threshold_layout)
+        
         # True Actions Section
         true_group = QGroupBox("True Actions (execute when image matches)")
         true_layout = QVBoxLayout(true_group)
@@ -449,6 +463,11 @@ class ImageMatcherDialog(QDialog):
             QMessageBox.warning(self, "Validation Error", "Match number must be at least 1.")
             return
         
+        threshold = self.threshold_input.value()
+        if threshold < 0 or threshold > 100:
+            QMessageBox.warning(self, "Validation Error", "Threshold must be between 0 and 100.")
+            return
+        
         self.accept()
     
     def get_action(self):
@@ -457,6 +476,7 @@ class ImageMatcherDialog(QDialog):
             "type": "image_matcher",
             "image_path": self.image_path_input.text().strip(),
             "match_number": self.match_number_input.value(),
+            "threshold": self.threshold_input.value(),  # 0-100, will be converted to 0.0-1.0
             "true_actions": self.true_actions.copy(),
             "false_actions": self.false_actions.copy()
         }
@@ -466,6 +486,12 @@ class ImageMatcherDialog(QDialog):
         self._action_data = action_data
         self.image_path_input.setText(action_data.get("image_path", ""))
         self.match_number_input.setValue(action_data.get("match_number", 1))
+        # Handle both old format (0.0-1.0) and new format (0-100)
+        threshold = action_data.get("threshold", 99)
+        if isinstance(threshold, float) and threshold <= 1.0:
+            # Old format: convert 0.0-1.0 to 0-100
+            threshold = int(threshold * 100)
+        self.threshold_input.setValue(threshold)
         self.true_actions = action_data.get("true_actions", []).copy()
         self.false_actions = action_data.get("false_actions", []).copy()
         self._populate_sub_action_list(True)
@@ -488,15 +514,26 @@ class ImageMatcherActionType(BaseActionType):
     def format_action_display(self, action_data: dict) -> str:
         image_path = action_data.get("image_path", "")
         match_number = action_data.get("match_number", 1)
+        threshold = action_data.get("threshold", 99)
+        # Handle both old format (0.0-1.0) and new format (0-100)
+        if isinstance(threshold, float) and threshold <= 1.0:
+            threshold = int(threshold * 100)
         true_actions = action_data.get("true_actions", [])
         false_actions = action_data.get("false_actions", [])
         # Show just filename if path is long
         filename = os.path.basename(image_path) if image_path else "No image"
         true_count = len(true_actions)
         false_count = len(false_actions)
-        return f"Image Matcher: {filename} (match #{match_number}) → True: {true_count} actions, False: {false_count} actions"
+        return f"Image Matcher: {filename} (match #{match_number}, threshold: {threshold}%) → True: {true_count} actions, False: {false_count} actions"
     
     def validate_action_data(self, action_data: dict) -> bool:
+        threshold = action_data.get("threshold", 99)
+        # Handle both old format (0.0-1.0) and new format (0-100)
+        if isinstance(threshold, float) and threshold <= 1.0:
+            threshold_valid = 0.0 <= threshold <= 1.0
+        else:
+            threshold_valid = isinstance(threshold, int) and 0 <= threshold <= 100
+        
         return (
             "image_path" in action_data and
             "match_number" in action_data and
@@ -504,6 +541,7 @@ class ImageMatcherActionType(BaseActionType):
             "false_actions" in action_data and
             isinstance(action_data["match_number"], int) and
             action_data["match_number"] >= 1 and
+            threshold_valid and
             isinstance(action_data["true_actions"], list) and
             isinstance(action_data["false_actions"], list)
         )

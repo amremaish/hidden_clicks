@@ -39,9 +39,48 @@ def capture_window_screenshot(hwnd):
         width = right - left
         height = bottom - top
         
+        # If client rect is zero (window is minimized), get the restore size
         if width == 0 or height == 0:
-            print(f"⚠️ Window has zero size: {width}x{height}")
-            return None
+            try:
+                # Get window placement to find restore size
+                placement = win32gui.GetWindowPlacement(hwnd)
+                if placement and len(placement) > 2:
+                    # placement[2] is rcNormalPosition (restore rectangle)
+                    restore_rect = placement[2]
+                    if restore_rect:
+                        # restore_rect is (left, top, right, bottom)
+                        width = restore_rect[2] - restore_rect[0]
+                        height = restore_rect[3] - restore_rect[1]
+                        # Adjust for window borders (approximate)
+                        # We'll use the restore size but need to account for borders
+                        # For now, use the restore size directly
+                        if width > 0 and height > 0:
+                            print(f"ℹ️ Window is minimized, using restore size: {width}x{height}")
+                        else:
+                            # Try GetWindowRect as fallback
+                            try:
+                                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                                width = right - left
+                                height = bottom - top
+                            except:
+                                pass
+                
+                # If still zero, try GetWindowRect
+                if width == 0 or height == 0:
+                    try:
+                        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                        width = right - left
+                        height = bottom - top
+                    except:
+                        pass
+                
+                # If still zero, we can't proceed
+                if width == 0 or height == 0:
+                    print(f"⚠️ Cannot determine window size (minimized or zero size)")
+                    return None
+            except Exception as e:
+                print(f"⚠️ Error getting window size: {e}")
+                return None
         
         # Get device context
         hwndDC = win32gui.GetWindowDC(hwnd)
@@ -120,43 +159,114 @@ def match_template_image(screenshot, template_path, match_number=1, threshold=0.
             print(f"⚠️ Could not load template image: {template_path}")
             return None
         
-        # Convert both to grayscale for better matching
-        screenshot_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
-        template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+        # Check if screenshot is smaller than template (can't match)
+        if screenshot.shape[0] < template.shape[0] or screenshot.shape[1] < template.shape[1]:
+            print(f"⚠️ Screenshot ({screenshot.shape[1]}x{screenshot.shape[0]}) is smaller than template ({template.shape[1]}x{template.shape[0]})")
+            return None
         
-        # Perform template matching
-        result = cv2.matchTemplate(screenshot_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+        template_h, template_w = template.shape[:2]
         
-        # Find all locations where the result exceeds the threshold
-        locations = np.where(result >= threshold)
+        # For high thresholds (>= 0.99), use color matching for pixel-perfect matching
+        # For lower thresholds, use grayscale for more flexible matching
+        use_color_matching = threshold >= 0.99
         
-        # Get all matches with their confidence scores
-        matches = []
-        for pt in zip(*locations[::-1]):  # Switch x and y coordinates
-            confidence = result[pt[1], pt[0]]
-            matches.append((pt[0], pt[1], confidence))
-        
-        # Sort by confidence (highest first)
-        matches.sort(key=lambda x: x[2], reverse=True)
+        if use_color_matching:
+            # Use color matching for strict, pixel-perfect matching
+            # Split into BGR channels and match each channel separately
+            # Then combine results - all channels must match well
+            
+            # Method 1: Multi-channel template matching
+            # Match each color channel separately
+            result_b = cv2.matchTemplate(screenshot[:,:,0], template[:,:,0], cv2.TM_CCOEFF_NORMED)
+            result_g = cv2.matchTemplate(screenshot[:,:,1], template[:,:,1], cv2.TM_CCOEFF_NORMED)
+            result_r = cv2.matchTemplate(screenshot[:,:,2], template[:,:,2], cv2.TM_CCOEFF_NORMED)
+            
+            # Combine results: all channels must exceed threshold
+            # Use minimum of all three channels (all must match well)
+            result_combined = np.minimum(np.minimum(result_b, result_g), result_r)
+            
+            # For very strict matching (100%), also verify pixel-by-pixel
+            if threshold >= 0.999:
+                # Find candidates first
+                candidate_locations = np.where(result_combined >= (threshold - 0.01))  # Slightly lower for candidates
+                candidates = []
+                for pt in zip(*candidate_locations[::-1]):
+                    x, y = pt[0], pt[1]
+                    # Extract the region from screenshot
+                    region = screenshot[y:y+template_h, x:x+template_w]
+                    if region.shape == template.shape:
+                        # Calculate pixel-perfect match percentage
+                        diff = np.abs(region.astype(np.int16) - template.astype(np.int16))
+                        # Calculate mean absolute difference per channel
+                        mean_diff = np.mean(diff, axis=(0, 1))
+                        # Convert to similarity (0-1 scale, where 1 = perfect match)
+                        # For 8-bit images, max difference is 255 per channel
+                        similarity = 1.0 - (np.mean(mean_diff) / 255.0)
+                        
+                        if similarity >= threshold:
+                            # Also check that no single pixel is too different
+                            max_pixel_diff = np.max(diff)
+                            if max_pixel_diff <= 10:  # Allow small differences for anti-aliasing
+                                candidates.append((x, y, similarity))
+                
+                # Sort by similarity
+                candidates.sort(key=lambda x: x[2], reverse=True)
+                matches = candidates
+            else:
+                # For 99% threshold, use combined channel matching
+                locations = np.where(result_combined >= threshold)
+                matches = []
+                for pt in zip(*locations[::-1]):
+                    confidence = result_combined[pt[1], pt[0]]
+                    matches.append((pt[0], pt[1], confidence))
+                matches.sort(key=lambda x: x[2], reverse=True)
+        else:
+            # Use grayscale matching for lower thresholds (more flexible)
+            screenshot_gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+            template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+            
+            # Perform template matching
+            result = cv2.matchTemplate(screenshot_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+            
+            # Find all locations where the result exceeds the threshold
+            locations = np.where(result >= threshold)
+            
+            # Get all matches with their confidence scores
+            matches = []
+            for pt in zip(*locations[::-1]):  # Switch x and y coordinates
+                confidence = result[pt[1], pt[0]]
+                matches.append((pt[0], pt[1], confidence))
+            
+            # Sort by confidence (highest first)
+            matches.sort(key=lambda x: x[2], reverse=True)
         
         # Remove overlapping matches (non-maximum suppression)
         filtered_matches = []
+        # Use template size to determine overlap distance (matches within template size are overlapping)
+        overlap_distance_x = max(template_w // 2, 10)  # At least 10 pixels
+        overlap_distance_y = max(template_h // 2, 10)  # At least 10 pixels
+        
         for match in matches:
             x, y, conf = match
             # Check if this match overlaps with any existing match
             overlap = False
             for existing_x, existing_y, _ in filtered_matches:
-                # If matches are within 20 pixels of each other, consider them overlapping
-                if abs(x - existing_x) < 20 and abs(y - existing_y) < 20:
+                # If matches are within the overlap distance, consider them overlapping
+                if abs(x - existing_x) < overlap_distance_x and abs(y - existing_y) < overlap_distance_y:
                     overlap = True
                     break
             if not overlap:
-                filtered_matches.append((x, y, conf))
+                # Verify the match is within bounds
+                if (x >= 0 and y >= 0 and 
+                    x + template_w <= screenshot.shape[1] and 
+                    y + template_h <= screenshot.shape[0]):
+                    filtered_matches.append((x, y, conf))
         
         # Return the nth match (1-indexed)
         if len(filtered_matches) >= match_number:
             x, y, confidence = filtered_matches[match_number - 1]
-            print(f"🖼️ Image match #{match_number} found at ({x}, {y}) with confidence {confidence:.2f}")
+            match_type = "color" if use_color_matching else "grayscale"
+            print(f"🖼️ Image match #{match_number} found at ({x}, {y}) with confidence {confidence:.4f} ({match_type} matching)")
             return (x, y)
         else:
             print(f"🖼️ Image match #{match_number} not found (found {len(filtered_matches)} matches)")
@@ -164,6 +274,8 @@ def match_template_image(screenshot, template_path, match_number=1, threshold=0.
             
     except Exception as e:
         print(f"⚠️ Error matching template image: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -215,8 +327,12 @@ def execute_actions(actions, hwnd):
                 # Capture screenshot of the window
                 screenshot = capture_window_screenshot(hwnd)
                 if screenshot is not None:
+                    # Get threshold (0-100, convert to 0.0-1.0)
+                    threshold = action.get("threshold", 99)
+                    if isinstance(threshold, int):
+                        threshold = threshold / 100.0  # Convert 0-100 to 0.0-1.0
                     # Try to match the template
-                    match_location = match_template_image(screenshot, image_path, match_number)
+                    match_location = match_template_image(screenshot, image_path, match_number, threshold)
                     if match_location is not None:
                         # Image matched - execute true actions
                         execute_actions(true_actions, hwnd)
@@ -306,8 +422,12 @@ def loop_for_process(name, hwnd, actions):
                         # Capture screenshot of the window
                         screenshot = capture_window_screenshot(hwnd)
                         if screenshot is not None:
+                            # Get threshold (0-100, convert to 0.0-1.0)
+                            threshold = action.get("threshold", 99)
+                            if isinstance(threshold, int):
+                                threshold = threshold / 100.0  # Convert 0-100 to 0.0-1.0
                             # Try to match the template
-                            match_location = match_template_image(screenshot, image_path, match_number)
+                            match_location = match_template_image(screenshot, image_path, match_number, threshold)
                             if match_location is not None:
                                 # Image matched - execute true actions
                                 print(f"✓ Image match #{match_number} found in {image_path}, executing {len(true_actions)} true actions")
