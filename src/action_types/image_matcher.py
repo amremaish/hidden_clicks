@@ -3,7 +3,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QDialogButtonBox, QPushButton, QFileDialog, QMessageBox,
-    QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QWidget, QSpinBox
+    QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QWidget, QSpinBox, QCheckBox
 )
 from PyQt5.QtCore import Qt
 import os
@@ -203,6 +203,69 @@ class ImageMatcherDialog(QDialog):
         threshold_layout.addStretch()
         layout.addLayout(threshold_layout)
         
+        # Full screen checkbox
+        self.full_screen_checkbox = QCheckBox("Use full screen screenshot (no crop area)")
+        self.full_screen_checkbox.setStyleSheet("""
+            QCheckBox {
+                font-size: 12px;
+                color: #333;
+                font-weight: bold;
+                padding: 5px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 2px solid #ccc;
+                border-radius: 3px;
+                background-color: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #42a5f5;
+                border-radius: 3px;
+                background-color: #42a5f5;
+            }
+        """)
+        self.full_screen_checkbox.stateChanged.connect(self.on_full_screen_changed)
+        layout.addWidget(self.full_screen_checkbox)
+        
+        # Crop area selection
+        crop_label = QLabel("Crop Area (optional - select area to screenshot):")
+        crop_label.setStyleSheet("font-size: 12px; color: #333; font-weight: bold;")
+        layout.addWidget(crop_label)
+        
+        crop_layout = QHBoxLayout()
+        self.crop_info_label = QLabel("No area selected")
+        self.crop_info_label.setStyleSheet("""
+            font-size: 11px; 
+            color: #666; 
+            padding: 8px;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            min-height: 28px;
+        """)
+        crop_layout.addWidget(self.crop_info_label)
+        
+        self.select_area_btn = QPushButton("Select Area...")
+        self.select_area_btn.setFixedWidth(120)
+        self.select_area_btn.setFixedHeight(35)
+        self.select_area_btn.clicked.connect(self.select_crop_area)
+        crop_layout.addWidget(self.select_area_btn)
+        
+        self.clear_area_btn = QPushButton("Clear")
+        self.clear_area_btn.setFixedWidth(80)
+        self.clear_area_btn.setFixedHeight(35)
+        self.clear_area_btn.clicked.connect(self.clear_crop_area)
+        crop_layout.addWidget(self.clear_area_btn)
+        
+        layout.addLayout(crop_layout)
+        
+        # Store crop area
+        self.crop_area = None
+        self.use_full_screen = False
+        
         # True Actions Section
         true_group = QGroupBox("True Actions (execute when image matches)")
         true_layout = QVBoxLayout(true_group)
@@ -286,6 +349,106 @@ class ImageMatcherDialog(QDialog):
         )
         if file_path:
             self.image_path_input.setText(file_path)
+    
+    def select_crop_area(self):
+        """Open screen selector to choose crop area"""
+        try:
+            from src.ui.screen_selector import ScreenSelector
+            
+            # Show selector (it will handle hiding this dialog)
+            print(f"🔍 Calling ScreenSelector.select_area...")
+            area = ScreenSelector.select_area(parent=self)
+            print(f"🔍 ScreenSelector returned: {area}")
+            
+            # Dialog should be visible again after selector closes
+            # Force it to be visible and active
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self.setFocus()
+            
+            if area:
+                x, y, width, height = area
+                self.crop_area = area
+                print(f"✅ Crop area selected: ({x}, {y}) - {width} × {height}")
+                self.crop_info_label.setText(f"Area: ({x}, {y}) - {width} × {height} px")
+                self.crop_info_label.setStyleSheet("""
+                    font-size: 11px; 
+                    color: #1976d2; 
+                    padding: 8px;
+                    background-color: #e3f2fd;
+                    border: 1px solid #42a5f5;
+                    border-radius: 4px;
+                    min-height: 28px;
+                """)
+            else:
+                print(f"⚠️ Crop area selection cancelled")
+                self.clear_crop_area()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Failed to open screen selector: {e}")
+            # Show dialog again even if there was an error
+            self.show()
+            self.raise_()
+            self.activateWindow()
+    
+    def on_full_screen_changed(self, state):
+        """Handle full screen checkbox state change"""
+        print(f"🔍 on_full_screen_changed called with state: {state} (Qt.Checked={Qt.Checked})")
+        print(f"   - Before: self.use_full_screen={self.use_full_screen}, self.crop_area={self.crop_area}")
+        
+        self.use_full_screen = (state == Qt.Checked)
+        
+        # Enable/disable crop area controls based on checkbox
+        enabled = not self.use_full_screen
+        self.crop_info_label.setEnabled(enabled)
+        self.select_area_btn.setEnabled(enabled)
+        self.clear_area_btn.setEnabled(enabled)
+        
+        # Visual feedback for disabled state
+        if enabled:
+            self.crop_info_label.setStyleSheet("""
+                font-size: 11px; 
+                color: #666; 
+                padding: 8px;
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                min-height: 28px;
+            """)
+        else:
+            self.crop_info_label.setStyleSheet("""
+                font-size: 11px; 
+                color: #999; 
+                padding: 8px;
+                background-color: #e0e0e0;
+                border: 1px solid #bbb;
+                border-radius: 4px;
+                min-height: 28px;
+            """)
+        
+        # Clear crop area when enabling full screen
+        if self.use_full_screen:
+            print(f"   - Clearing crop_area because full screen is enabled")
+            self.crop_area = None
+        
+        print(f"   - After: self.use_full_screen={self.use_full_screen}, self.crop_area={self.crop_area}")
+    
+    def clear_crop_area(self):
+        """Clear the selected crop area"""
+        self.crop_area = None
+        self.crop_info_label.setText("No area selected")
+        self.crop_info_label.setStyleSheet("""
+            font-size: 11px; 
+            color: #666; 
+            padding: 8px;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            min-height: 28px;
+        """)
     
     def _add_true_action(self):
         """Add an action to the true actions list"""
@@ -429,16 +592,38 @@ class ImageMatcherDialog(QDialog):
                 display_text = action_type.format_action_display(action)
                 actions_list.addItem(display_text)
     
+    def accept(self):
+        """Override accept to add logging"""
+        print(f"🔍 ImageMatcherDialog.accept() called - crop_area: {self.crop_area}")
+        super().accept()
+        print(f"✅ ImageMatcherDialog accepted, result code: {self.result()}")
+    
+    def reject(self):
+        """Override reject to add logging"""
+        print(f"⚠️ ImageMatcherDialog.reject() called - crop_area: {self.crop_area}")
+        import traceback
+        traceback.print_stack()
+        super().reject()
+        print(f"❌ ImageMatcherDialog rejected, result code: {self.result()}")
+    
+    def closeEvent(self, event):
+        """Override closeEvent to add logging"""
+        print(f"🔍 ImageMatcherDialog.closeEvent() called - crop_area: {self.crop_area}, result: {self.result()}")
+        super().closeEvent(event)
+    
     def validate_and_accept(self):
         """Validate inputs before accepting"""
+        print(f"🔍 validate_and_accept called - crop_area: {self.crop_area}")
         image_path = self.image_path_input.text().strip()
         match_number = self.match_number_input.value()
         
         if not image_path:
+            print(f"⚠️ Validation failed: No image path")
             QMessageBox.warning(self, "Validation Error", "Please enter an image path.")
             return
         
         if not os.path.exists(image_path):
+            print(f"⚠️ Image file not found: {image_path}")
             reply = QMessageBox.question(
                 self,
                 "File Not Found",
@@ -447,11 +632,15 @@ class ImageMatcherDialog(QDialog):
                 QMessageBox.No
             )
             if reply == QMessageBox.No:
+                print(f"⚠️ User chose not to continue with missing file")
                 return
+            else:
+                print(f"✅ User chose to continue despite missing file")
         
         # Check if it's a valid image file
         valid_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif']
         if not any(image_path.lower().endswith(ext) for ext in valid_extensions):
+            print(f"⚠️ Validation failed: Invalid file extension for {image_path}")
             QMessageBox.warning(
                 self,
                 "Invalid File",
@@ -460,29 +649,51 @@ class ImageMatcherDialog(QDialog):
             return
         
         if match_number < 1:
+            print(f"⚠️ Validation failed: Match number < 1")
             QMessageBox.warning(self, "Validation Error", "Match number must be at least 1.")
             return
         
         threshold = self.threshold_input.value()
         if threshold < 0 or threshold > 100:
+            print(f"⚠️ Validation failed: Threshold out of range")
             QMessageBox.warning(self, "Validation Error", "Threshold must be between 0 and 100.")
             return
         
+        print(f"✅ Validation passed - calling accept() with crop_area: {self.crop_area}")
         self.accept()
     
     def get_action(self):
         """Return the image matcher action dictionary"""
-        return {
+        print(f"🔍 get_action called - crop_area: {self.crop_area}, use_full_screen: {self.use_full_screen}")
+        action = {
             "type": "image_matcher",
             "image_path": self.image_path_input.text().strip(),
             "match_number": self.match_number_input.value(),
             "threshold": self.threshold_input.value(),  # 0-100, will be converted to 0.0-1.0
             "true_actions": self.true_actions.copy(),
-            "false_actions": self.false_actions.copy()
+            "false_actions": self.false_actions.copy(),
+            "use_full_screen": self.use_full_screen
         }
+        
+        # Add crop area if selected (only if not using full screen)
+        if self.crop_area and not self.use_full_screen:
+            x, y, width, height = self.crop_area
+            action["crop_x"] = x
+            action["crop_y"] = y
+            action["crop_width"] = width
+            action["crop_height"] = height
+            print(f"✅ Crop area added to action: ({x}, {y}) - {width} × {height}")
+        else:
+            print(f"⚠️ Crop area NOT added - crop_area exists: {self.crop_area is not None}, full_screen: {self.use_full_screen}")
+        
+        return action
     
     def load_action_data(self, action_data):
         """Load existing action data into the dialog (for editing)"""
+        print(f"🔍 load_action_data called")
+        print(f"   - use_full_screen in data: {action_data.get('use_full_screen', False)}")
+        print(f"   - crop coords in data: crop_x={action_data.get('crop_x')}, crop_y={action_data.get('crop_y')}, crop_width={action_data.get('crop_width')}, crop_height={action_data.get('crop_height')}")
+        
         self._action_data = action_data
         self.image_path_input.setText(action_data.get("image_path", ""))
         self.match_number_input.setValue(action_data.get("match_number", 1))
@@ -496,6 +707,74 @@ class ImageMatcherDialog(QDialog):
         self.false_actions = action_data.get("false_actions", []).copy()
         self._populate_sub_action_list(True)
         self._populate_sub_action_list(False)
+        
+        # Load crop area BEFORE setting checkbox state to prevent it from being cleared
+        # Load crop area if present (only if not using full screen)
+        use_full_screen = action_data.get("use_full_screen", False)
+        if not use_full_screen and "crop_x" in action_data and "crop_y" in action_data and "crop_width" in action_data and "crop_height" in action_data:
+            self.crop_area = (
+                action_data["crop_x"],
+                action_data["crop_y"],
+                action_data["crop_width"],
+                action_data["crop_height"]
+            )
+            x, y, width, height = self.crop_area
+            print(f"✅ Crop area loaded EARLY: ({x}, {y}) - {width} × {height}")
+        else:
+            print(f"⚠️ No crop area to load - use_full_screen: {use_full_screen}, has coords: {('crop_x' in action_data and 'crop_y' in action_data)}")
+            self.crop_area = None
+        
+        # Now set the full screen checkbox state
+        # Block signals temporarily to prevent automatic triggering of on_full_screen_changed
+        self.use_full_screen = use_full_screen
+        print(f"   - Setting checkbox to: {self.use_full_screen}")
+        self.full_screen_checkbox.blockSignals(True)
+        self.full_screen_checkbox.setChecked(self.use_full_screen)
+        self.full_screen_checkbox.blockSignals(False)
+        
+        # Manually update UI state based on checkbox without clearing crop_area
+        enabled = not self.use_full_screen
+        self.crop_info_label.setEnabled(enabled)
+        self.select_area_btn.setEnabled(enabled)
+        self.clear_area_btn.setEnabled(enabled)
+        
+        # Update crop info label and style based on loaded crop area
+        if self.crop_area and not self.use_full_screen:
+            x, y, width, height = self.crop_area
+            self.crop_info_label.setText(f"Area: ({x}, {y}) - {width} × {height} px")
+            self.crop_info_label.setStyleSheet("""
+                font-size: 11px; 
+                color: #1976d2; 
+                padding: 8px;
+                background-color: #e3f2fd;
+                border: 1px solid #42a5f5;
+                border-radius: 4px;
+                min-height: 28px;
+            """)
+        else:
+            self.crop_info_label.setText("No area selected")
+            if enabled:
+                self.crop_info_label.setStyleSheet("""
+                    font-size: 11px; 
+                    color: #666; 
+                    padding: 8px;
+                    background-color: #f0f0f0;
+                    border: 1px solid #ccc;
+                    border-radius: 4px;
+                    min-height: 28px;
+                """)
+            else:
+                self.crop_info_label.setStyleSheet("""
+                    font-size: 11px; 
+                    color: #999; 
+                    padding: 8px;
+                    background-color: #e0e0e0;
+                    border: 1px solid #bbb;
+                    border-radius: 4px;
+                    min-height: 28px;
+                """)
+        
+        print(f"   - Final self.crop_area: {self.crop_area}")
         self.setWindowTitle(get_icon_text('image', 'Edit Image Matcher Action'))
 
 

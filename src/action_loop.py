@@ -1,5 +1,8 @@
 import threading
 import time
+import os
+import glob
+from datetime import datetime
 import win32con
 import win32gui
 import win32api
@@ -13,6 +16,43 @@ from ctypes import wintypes
 
 running_flags = {}
 threads = {}
+
+def save_image_matcher_screenshot(screenshot):
+    """Save screenshot to logs folder, keeping only the last 5 screenshots (non-blocking)"""
+    try:
+        # Create logs folder if it doesn't exist
+        logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        # Generate filename with datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
+        filename = f"image_matcher_{timestamp}.png"
+        filepath = os.path.join(logs_dir, filename)
+        
+        # Convert BGR to RGB for saving (OpenCV uses BGR, PIL uses RGB)
+        screenshot_rgb = cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(screenshot_rgb)
+        img.save(filepath, "PNG", optimize=False, compress_level=1)  # Faster saving
+        
+        # Quick cleanup: only check if we need to delete (optimize file operations)
+        # Get all image_matcher screenshots and sort by modification time (newest first)
+        pattern = os.path.join(logs_dir, "image_matcher_*.png")
+        existing_files = glob.glob(pattern)
+        
+        # Only do cleanup if we have more than 5 files (avoid unnecessary sorting)
+        if len(existing_files) > 5:
+            existing_files.sort(key=os.path.getmtime, reverse=True)
+            # Keep only the 5 most recent files, delete the rest
+            for old_file in existing_files[5:]:
+                try:
+                    os.remove(old_file)
+                except:
+                    pass  # Silently ignore deletion errors to avoid slowing down
+        
+        return filepath
+    except Exception as e:
+        # Silently fail to avoid slowing down the main process
+        return None
 
 def read_file_last_line(file_path):
     """Read the last line of a file"""
@@ -31,9 +71,27 @@ def read_file_last_line(file_path):
         return ""
 
 
-def capture_window_screenshot(hwnd):
-    """Capture a screenshot of the specified window using PrintWindow (works even when minimized)"""
+def capture_window_screenshot(hwnd, crop_area=None):
+    """Capture a screenshot of the specified window using PrintWindow (works even when minimized)
+    
+    Args:
+        hwnd: Window handle
+        crop_area: Optional tuple (x, y, width, height) to crop the screenshot. 
+                   Coordinates are relative to the window client area.
+    
+    Returns:
+        Screenshot as numpy array (BGR format), or None on failure
+    """
+    hwndDC = None
+    mfcDC = None
+    saveDC = None
+    bitmap = None
+    
     try:
+        # Verify window handle is still valid (fast check, no logging)
+        if not win32gui.IsWindow(hwnd):
+            return None
+        
         # Get client rectangle (content area of the window)
         left, top, right, bottom = win32gui.GetClientRect(hwnd)
         width = right - left
@@ -84,6 +142,9 @@ def capture_window_screenshot(hwnd):
         
         # Get device context
         hwndDC = win32gui.GetWindowDC(hwnd)
+        if not hwndDC:
+            return None  # Fast fail, no logging to avoid slowdown
+        
         mfcDC = win32ui.CreateDCFromHandle(hwndDC)
         saveDC = mfcDC.CreateCompatibleDC()
         
@@ -100,13 +161,7 @@ def capture_window_screenshot(hwnd):
         result = user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), PW_RENDERFULLCONTENT)
         
         if not result:
-            print(f"⚠️ PrintWindow failed for window {hwnd}")
-            # Cleanup
-            win32gui.DeleteObject(bitmap.GetHandle())
-            saveDC.DeleteDC()
-            mfcDC.DeleteDC()
-            win32gui.ReleaseDC(hwnd, hwndDC)
-            return None
+            return None  # Fast fail, no logging to avoid slowdown
         
         # Get bitmap data
         bmpinfo = bitmap.GetInfo()
@@ -128,16 +183,55 @@ def capture_window_screenshot(hwnd):
         # Convert RGB to BGR for OpenCV
         screenshot_bgr = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
         
-        # Cleanup
-        win32gui.DeleteObject(bitmap.GetHandle())
-        saveDC.DeleteDC()
-        mfcDC.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwndDC)
+        # Crop the screenshot if crop_area is specified
+        if crop_area:
+            crop_x, crop_y, crop_width, crop_height = crop_area
+            # Ensure crop coordinates are within bounds
+            h, w = screenshot_bgr.shape[:2]
+            crop_x = max(0, min(crop_x, w - 1))
+            crop_y = max(0, min(crop_y, h - 1))
+            crop_width = min(crop_width, w - crop_x)
+            crop_height = min(crop_height, h - crop_y)
+            
+            if crop_width > 0 and crop_height > 0:
+                screenshot_bgr = screenshot_bgr[crop_y:crop_y+crop_height, crop_x:crop_x+crop_width]
+        
+        # Explicitly delete intermediate objects to free memory
+        del img
+        del screenshot_np
+        del bmpstr
         
         return screenshot_bgr
     except Exception as e:
         print(f"⚠️ Error capturing screenshot: {e}")
+        import traceback
+        traceback.print_exc()
         return None
+    finally:
+        # Always cleanup resources, even if an exception occurred
+        try:
+            if bitmap:
+                try:
+                    win32gui.DeleteObject(bitmap.GetHandle())
+                except:
+                    pass
+            if saveDC:
+                try:
+                    saveDC.DeleteDC()
+                except:
+                    pass
+            if mfcDC:
+                try:
+                    mfcDC.DeleteDC()
+                except:
+                    pass
+            if hwndDC and hwnd:
+                try:
+                    win32gui.ReleaseDC(hwnd, hwndDC)
+                except:
+                    pass
+        except:
+            pass  # Ignore cleanup errors
 
 
 def match_template_image(screenshot, template_path, match_number=1, threshold=0.99):
@@ -152,7 +246,13 @@ def match_template_image(screenshot, template_path, match_number=1, threshold=0.
     Returns:
         Tuple (x, y) of the match location, or None if not found
     """
+    template = None
     try:
+        # Validate screenshot
+        if screenshot is None or screenshot.size == 0:
+            print(f"⚠️ Invalid screenshot provided")
+            return None
+        
         # Load template image
         template = cv2.imread(template_path, cv2.IMREAD_COLOR)
         if template is None:
@@ -277,6 +377,10 @@ def match_template_image(screenshot, template_path, match_number=1, threshold=0.
         import traceback
         traceback.print_exc()
         return None
+    finally:
+        # Explicitly release template memory if it was loaded
+        if template is not None:
+            del template
 
 
 def execute_actions(actions, hwnd):
@@ -324,21 +428,81 @@ def execute_actions(actions, hwnd):
             false_actions = action.get("false_actions", [])
             
             if image_path:
+                # Verify window is still valid before capturing
+                if not win32gui.IsWindow(hwnd):
+                    print(f"⚠️ Window handle {hwnd} is no longer valid")
+                    return
+                
+                # Get crop area if specified (only if not using full screen)
+                crop_area = None
+                use_full_screen = action.get("use_full_screen", False)
+                if not use_full_screen and "crop_x" in action and "crop_y" in action and "crop_width" in action and "crop_height" in action:
+                    # Crop coordinates are stored as screen coordinates, need to convert to client coordinates
+                    try:
+                        screen_x = action["crop_x"]
+                        screen_y = action["crop_y"]
+                        crop_width = action["crop_width"]
+                        crop_height = action["crop_height"]
+                        
+                        # Get window position on screen
+                        window_rect = win32gui.GetWindowRect(hwnd)
+                        client_rect = win32gui.GetClientRect(hwnd)
+                        
+                        # Calculate window border sizes
+                        border_left = client_rect[0] - (window_rect[0] - window_rect[0])  # Usually 0
+                        border_top = client_rect[1] - (window_rect[1] - window_rect[1])  # Usually 0
+                        
+                        # Get actual border by comparing window rect and client rect
+                        # ClientToScreen the top-left corner of client area
+                        client_top_left = win32gui.ClientToScreen(hwnd, (0, 0))
+                        border_left = client_top_left[0] - window_rect[0]
+                        border_top = client_top_left[1] - window_rect[1]
+                        
+                        # Convert screen coordinates to client coordinates
+                        client_x = screen_x - client_top_left[0]
+                        client_y = screen_y - client_top_left[1]
+                        
+                        # Ensure coordinates are within client bounds
+                        client_x = max(0, min(client_x, client_rect[2] - 1))
+                        client_y = max(0, min(client_y, client_rect[3] - 1))
+                        crop_width = min(crop_width, client_rect[2] - client_x)
+                        crop_height = min(crop_height, client_rect[3] - client_y)
+                        
+                        if crop_width > 0 and crop_height > 0:
+                            crop_area = (client_x, client_y, crop_width, crop_height)
+                    except Exception as e:
+                        print(f"⚠️ Error converting crop coordinates: {e}")
+                        # Fall back to using coordinates as-is (assume they're already client coordinates)
+                        crop_area = (
+                            action["crop_x"],
+                            action["crop_y"],
+                            action["crop_width"],
+                            action["crop_height"]
+                        )
+                
                 # Capture screenshot of the window
-                screenshot = capture_window_screenshot(hwnd)
+                screenshot = capture_window_screenshot(hwnd, crop_area)
                 if screenshot is not None:
-                    # Get threshold (0-100, convert to 0.0-1.0)
-                    threshold = action.get("threshold", 99)
-                    if isinstance(threshold, int):
-                        threshold = threshold / 100.0  # Convert 0-100 to 0.0-1.0
-                    # Try to match the template
-                    match_location = match_template_image(screenshot, image_path, match_number, threshold)
-                    if match_location is not None:
-                        # Image matched - execute true actions
-                        execute_actions(true_actions, hwnd)
-                    else:
-                        # Image did not match - execute false actions
-                        execute_actions(false_actions, hwnd)
+                    try:
+                        # Save screenshot to logs folder
+                        save_image_matcher_screenshot(screenshot)
+                        
+                        # Get threshold (0-100, convert to 0.0-1.0)
+                        threshold = action.get("threshold", 99)
+                        if isinstance(threshold, int):
+                            threshold = threshold / 100.0  # Convert 0-100 to 0.0-1.0
+                        # Try to match the template
+                        match_location = match_template_image(screenshot, image_path, match_number, threshold)
+                        if match_location is not None:
+                            # Image matched - execute true actions
+                            execute_actions(true_actions, hwnd)
+                        else:
+                            # Image did not match - execute false actions
+                            execute_actions(false_actions, hwnd)
+                    finally:
+                        # Explicitly release screenshot memory
+                        if screenshot is not None:
+                            del screenshot
                 else:
                     # Screenshot failed - execute false actions
                     print(f"⚠️ Screenshot capture failed, executing false actions")
@@ -419,9 +583,49 @@ def loop_for_process(name, hwnd, actions):
                     false_actions = action.get("false_actions", [])
                     
                     if image_path:
+                        # Get crop area if specified (only if not using full screen)
+                        crop_area = None
+                        use_full_screen = action.get("use_full_screen", False)
+                        if not use_full_screen and "crop_x" in action and "crop_y" in action and "crop_width" in action and "crop_height" in action:
+                            # Crop coordinates are stored as screen coordinates, need to convert to client coordinates
+                            try:
+                                screen_x = action["crop_x"]
+                                screen_y = action["crop_y"]
+                                crop_width = action["crop_width"]
+                                crop_height = action["crop_height"]
+                                
+                                # Get window position on screen and convert screen to client coordinates
+                                client_top_left = win32gui.ClientToScreen(hwnd, (0, 0))
+                                client_rect = win32gui.GetClientRect(hwnd)
+                                
+                                # Convert screen coordinates to client coordinates
+                                client_x = screen_x - client_top_left[0]
+                                client_y = screen_y - client_top_left[1]
+                                
+                                # Ensure coordinates are within client bounds
+                                client_x = max(0, min(client_x, client_rect[2] - 1))
+                                client_y = max(0, min(client_y, client_rect[3] - 1))
+                                crop_width = min(crop_width, client_rect[2] - client_x)
+                                crop_height = min(crop_height, client_rect[3] - client_y)
+                                
+                                if crop_width > 0 and crop_height > 0:
+                                    crop_area = (client_x, client_y, crop_width, crop_height)
+                            except Exception as e:
+                                print(f"⚠️ Error converting crop coordinates: {e}")
+                                # Fall back to using coordinates as-is (assume they're already client coordinates)
+                                crop_area = (
+                                    action["crop_x"],
+                                    action["crop_y"],
+                                    action["crop_width"],
+                                    action["crop_height"]
+                                )
+                        
                         # Capture screenshot of the window
-                        screenshot = capture_window_screenshot(hwnd)
+                        screenshot = capture_window_screenshot(hwnd, crop_area)
                         if screenshot is not None:
+                            # Save screenshot to logs folder
+                            save_image_matcher_screenshot(screenshot)
+                            
                             # Get threshold (0-100, convert to 0.0-1.0)
                             threshold = action.get("threshold", 99)
                             if isinstance(threshold, int):

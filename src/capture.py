@@ -429,18 +429,32 @@ class CoordinateCaptureWindow(QWidget):
             elif hasattr(dialog, 'update_max_action_count'):
                 dialog.update_max_action_count(self.action_list.count())
             
-            if dialog.exec_() == QDialog.Accepted:
+            print(f"🔍 Showing dialog for editing action type: {action.get('type', '')}")
+            result = dialog.exec_()
+            print(f"🔍 Dialog closed with result: {result} (QDialog.Accepted={QDialog.Accepted})")
+            
+            if result == QDialog.Accepted:
+                print(f"✅ Dialog accepted, checking for get_action method...")
                 # Get updated action data from dialog
                 if hasattr(dialog, 'get_action'):
+                    print(f"✅ get_action method found, calling it...")
                     updated_action = dialog.get_action()
+                    print(f"🔍 Updated action received: {updated_action.get('type', '')} with crop coords: crop_x={updated_action.get('crop_x')}, crop_y={updated_action.get('crop_y')}")
                     if updated_action and action_type.validate_action_data(updated_action):
                         # Update the action
                         self.actions[row] = updated_action
+                        print(f"✅ Action updated in self.actions[{row}]")
                         # Rebuild the list to show updated display
                         self._rebuild_action_list()
                         self.save_actions()
+                        print(f"✅ Actions saved to file")
                     else:
+                        print(f"⚠️ Validation failed for updated action")
                         QMessageBox.warning(self, "Error", "Invalid action data")
+                else:
+                    print(f"⚠️ Dialog does not have get_action method")
+            else:
+                print(f"⚠️ Dialog was not accepted (result={result})")
 
     def remove_action(self, row):
         """Remove action at specified row"""
