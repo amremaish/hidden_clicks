@@ -5,9 +5,71 @@ from PyQt5.QtWidgets import (
 )
 import win32gui
 import win32process
+import win32con
 import ctypes as c
 
 from src.capture import CoordinateCaptureWindow
+
+
+def find_window_flexible(search_title):
+    """
+    Find window by flexible matching:
+    1. Exact title match
+    2. Partial title match (contains)
+    3. Process name match
+    
+    Returns: (hwnd, actual_title) or (None, None) if not found
+    """
+    # Try exact match first
+    hwnd = win32gui.FindWindow(None, search_title)
+    if hwnd != 0:
+        return (hwnd, search_title)
+    
+    # Try partial match (window title contains search_title)
+    found_hwnd = None
+    found_title = None
+    
+    def enum_handler(hwnd, _):
+        nonlocal found_hwnd, found_title
+        if found_hwnd:  # Already found, skip
+            return
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd).strip()
+            if title and search_title.lower() in title.lower():
+                found_hwnd = hwnd
+                found_title = title
+    
+    win32gui.EnumWindows(enum_handler, None)
+    
+    if found_hwnd:
+        return (found_hwnd, found_title)
+    
+    # Try reverse partial match (search_title contains window title keywords)
+    # This helps if user saved "Tibia - Byte" but title is now "Tibia - Byte - 3233859lvl"
+    keywords = search_title.split()
+    if len(keywords) >= 2:  # At least 2 words to match
+        found_hwnd = None
+        found_title = None
+        
+        def enum_handler2(hwnd, _):
+            nonlocal found_hwnd, found_title
+            if found_hwnd:
+                return
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd).strip()
+                if title:
+                    # Check if all keywords appear in the title
+                    title_lower = title.lower()
+                    if all(keyword.lower() in title_lower for keyword in keywords):
+                        found_hwnd = hwnd
+                        found_title = title
+        
+        win32gui.EnumWindows(enum_handler2, None)
+        
+        if found_hwnd:
+            return (found_hwnd, found_title)
+    
+    return (None, None)
 
 
 class OTClientSelector(QMainWindow):
@@ -83,26 +145,31 @@ class OTClientSelector(QMainWindow):
     def handle_start(self):
         self.attached_processes = []
 
-        for name in self.selected_windows:
+        for saved_name in self.selected_windows:
             try:
-                hwnd = win32gui.FindWindow(None, name)
-                if hwnd == 0:
+                # Try flexible matching first
+                hwnd, actual_title = find_window_flexible(saved_name)
+                
+                if hwnd is None or hwnd == 0:
                     raise Exception("Window not found.")
-
+                
+                # Use the actual found title (might be different from saved_name)
                 # Loading Addresses
-                game = win32gui.FindWindow(None, name)
-                proc_id = win32process.GetWindowThreadProcessId(game)
+                proc_id = win32process.GetWindowThreadProcessId(hwnd)
                 proc_id = proc_id[1]
                 process_handle = c.windll.kernel32.OpenProcess(0x1F0FFF, False, proc_id)
                 modules = win32process.EnumProcessModules(process_handle)
                 base_address = modules[0]
 
-                self.attached_processes.append((name, game, base_address))
+                # Store with actual title (so it works even if title changed)
+                self.attached_processes.append((actual_title, hwnd, base_address))
 
-                print(f"{name} -> HWND: {proc_id}, Base Address: {base_address}")
+                if actual_title != saved_name:
+                    print(f"⚠️ Title changed: '{saved_name}' -> '{actual_title}'")
+                print(f"{actual_title} -> HWND: {proc_id}, Base Address: {base_address}")
 
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to attach to {name}:\n{e}")
+                QMessageBox.critical(self, "Error", f"Failed to attach to {saved_name}:\n{e}")
 
         if self.attached_processes:
             self.capture_window = CoordinateCaptureWindow(self.attached_processes)

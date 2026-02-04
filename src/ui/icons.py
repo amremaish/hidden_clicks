@@ -31,6 +31,7 @@ ICON_MAPPINGS = {
     'keyboard': (QStyle.SP_FileDialogListView, '⌨️'),
     'hotkey': (QStyle.SP_FileDialogListView, '⌨️'),
     'image': (QStyle.SP_FileDialogListView, '🖼️'),
+    'text': (QStyle.SP_FileDialogListView, '📝'),
 }
 
 

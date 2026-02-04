@@ -30,6 +30,7 @@ a = Analysis(
         'numpy',
         'PIL',
         'PIL.Image',
+        'pytesseract',
         'win32gui',
         'win32api',
         'win32con',

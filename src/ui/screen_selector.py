@@ -12,8 +12,10 @@ class ScreenSelector(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.start_point = None
-        self.end_point = None
+        self.start_point = None  # Screen coordinates (globalPos)
+        self.end_point = None  # Screen coordinates (globalPos)
+        self.start_point_widget = None  # Widget coordinates (pos) for drawing
+        self.end_point_widget = None  # Widget coordinates (pos) for drawing
         self.selection_rect = None
         self.selected_area = None
         
@@ -129,21 +131,31 @@ class ScreenSelector(QDialog):
     def mousePressEvent(self, event):
         """Start selection"""
         if event.button() == Qt.LeftButton:
-            self.start_point = event.pos()
-            self.end_point = event.pos()
-            self.selection_rect = QRect(self.start_point, self.end_point)
+            # Use globalPos() to get true screen coordinates for storage
+            # But use pos() for drawing (widget-relative)
+            global_pos = event.globalPos()
+            widget_pos = event.pos()
+            self.start_point = global_pos  # Store screen coordinates
+            self.start_point_widget = widget_pos  # Store widget coordinates for drawing
+            self.end_point = global_pos
+            self.end_point_widget = widget_pos
+            self.selection_rect = QRect(self.start_point_widget, self.end_point_widget)
             self.update()
     
     def mouseMoveEvent(self, event):
         """Update selection while dragging"""
         if self.start_point is not None:
-            self.end_point = event.pos()
-            # Create normalized rectangle
+            # Use globalPos() for screen coordinates, pos() for widget coordinates
+            global_pos = event.globalPos()
+            widget_pos = event.pos()
+            self.end_point = global_pos  # Store screen coordinates
+            self.end_point_widget = widget_pos  # Store widget coordinates for drawing
+            # Create normalized rectangle using widget coordinates for drawing
             self.selection_rect = QRect(
-                min(self.start_point.x(), self.end_point.x()),
-                min(self.start_point.y(), self.end_point.y()),
-                abs(self.end_point.x() - self.start_point.x()),
-                abs(self.end_point.y() - self.start_point.y())
+                min(self.start_point_widget.x(), self.end_point_widget.x()),
+                min(self.start_point_widget.y(), self.end_point_widget.y()),
+                abs(self.end_point_widget.x() - self.start_point_widget.x()),
+                abs(self.end_point_widget.y() - self.start_point_widget.y())
             )
             self.update()
     
@@ -151,20 +163,27 @@ class ScreenSelector(QDialog):
         """Finish selection"""
         if event.button() == Qt.LeftButton and self.start_point is not None:
             if self.selection_rect and self.selection_rect.width() > 10 and self.selection_rect.height() > 10:
-                # Store the selected area (screen coordinates)
-                self.selected_area = (
-                    self.selection_rect.x(),
-                    self.selection_rect.y(),
-                    self.selection_rect.width(),
-                    self.selection_rect.height()
-                )
-                # Reset start point to prevent further dragging
+                # Store the selected area using screen coordinates (from globalPos)
+                # Calculate screen coordinates from the stored global points
+                # Add offsets to compensate for coordinate shift
+                screen_x = min(self.start_point.x(), self.end_point.x()) + 8  # Add 8px offset to x
+                screen_y = min(self.start_point.y(), self.end_point.y()) + 30  # Add 30px offset to y
+                screen_width = abs(self.end_point.x() - self.start_point.x())
+                screen_height = abs(self.end_point.y() - self.start_point.y())
+                self.selected_area = (screen_x, screen_y, screen_width, screen_height)
+                # Reset points to prevent further dragging
                 self.start_point = None
+                self.start_point_widget = None
+                self.end_point = None
+                self.end_point_widget = None
                 # Accept the selection
                 self.accept()
             else:
                 # Selection too small, cancel
                 self.start_point = None
+                self.start_point_widget = None
+                self.end_point = None
+                self.end_point_widget = None
                 self.reject()
     
     def keyPressEvent(self, event):
@@ -173,13 +192,21 @@ class ScreenSelector(QDialog):
             self.reject()
         elif event.key() == Qt.Key_Enter or event.key() == Qt.Key_Return:
             if self.selection_rect and self.selection_rect.width() > 10 and self.selection_rect.height() > 10:
-                # Finalize selection
-                self.selected_area = (
-                    self.selection_rect.x(),
-                    self.selection_rect.y(),
-                    self.selection_rect.width(),
-                    self.selection_rect.height()
-                )
+                # Finalize selection using screen coordinates
+                if self.start_point and self.end_point:
+                    screen_x = min(self.start_point.x(), self.end_point.x()) + 8  # Add 8px offset to x
+                    screen_y = min(self.start_point.y(), self.end_point.y()) + 30  # Add 30px offset to y
+                    screen_width = abs(self.end_point.x() - self.start_point.x())
+                    screen_height = abs(self.end_point.y() - self.start_point.y())
+                    self.selected_area = (screen_x, screen_y, screen_width, screen_height)
+                else:
+                    # Fallback to widget coordinates (shouldn't happen)
+                    self.selected_area = (
+                        self.selection_rect.x(),
+                        self.selection_rect.y(),
+                        self.selection_rect.width(),
+                        self.selection_rect.height()
+                    )
                 self.accept()
             else:
                 self.reject()
@@ -190,18 +217,31 @@ class ScreenSelector(QDialog):
         """Close and return selected area"""
         # Ensure selected_area is set before accepting
         if self.selection_rect and not self.selected_area:
-            self.selected_area = (
-                self.selection_rect.x(),
-                self.selection_rect.y(),
-                self.selection_rect.width(),
-                self.selection_rect.height()
-            )
+            # Use screen coordinates if available
+            if self.start_point and self.end_point:
+                screen_x = min(self.start_point.x(), self.end_point.x()) + 8  # Add 8px offset to x
+                screen_y = min(self.start_point.y(), self.end_point.y()) + 30  # Add 30px offset to y
+                screen_width = abs(self.end_point.x() - self.start_point.x())
+                screen_height = abs(self.end_point.y() - self.start_point.y())
+                self.selected_area = (screen_x, screen_y, screen_width, screen_height)
+            else:
+                # Fallback to widget coordinates (shouldn't happen)
+                self.selected_area = (
+                    self.selection_rect.x(),
+                    self.selection_rect.y(),
+                    self.selection_rect.width(),
+                    self.selection_rect.height()
+                )
         # Call parent accept to set result code properly
         super().accept()
     
     def reject(self):
         """Cancel selection"""
         self.selected_area = None
+        self.start_point = None
+        self.start_point_widget = None
+        self.end_point = None
+        self.end_point_widget = None
         # Call parent reject to set result code properly
         super().reject()
     

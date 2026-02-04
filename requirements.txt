@@ -31,3 +31,4 @@ soupsieve==2.7
 typing_extensions==4.13.2
 urllib3==2.4.0
 pyinstaller
+pytesseract==0.3.13

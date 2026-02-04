@@ -1,0 +1,90 @@
+[
+  {
+    "type": "end_file_reader",
+    "file_path": "E:/Games/tibia/Wikiclient/PathSeason14V1.log",
+    "key_text": "BOT_CLOSED",
+    "true_actions": [
+      {
+        "type": "delay",
+        "ms": 6000
+      },
+      {
+        "type": "left_click",
+        "x": 170,
+        "y": 51
+      },
+      {
+        "type": "delay",
+        "ms": 2000
+      }
+    ],
+    "false_actions": [],
+    "enabled": false
+  },
+  {
+    "type": "delay",
+    "ms": 2000,
+    "enabled": false
+  },
+  {
+    "type": "image_matcher",
+    "image_path": "C:/Users/Amr Emaish/OneDrive/Desktop/Screenshot 2025-12-28 033649.png",
+    "match_number": 1,
+    "threshold": 68,
+    "true_actions": [],
+    "false_actions": [
+      {
+        "type": "delay",
+        "ms": 2000
+      },
+      {
+        "type": "left_click",
+        "x": 171,
+        "y": 52
+      }
+    ],
+    "use_full_screen": false,
+    "crop_x": 0,
+    "crop_y": 26,
+    "crop_width": 192,
+    "crop_height": 1338,
+    "enabled": false
+  },
+  {
+    "type": "ocr_matcher",
+    "text": "on",
+    "match_mode": "contains",
+    "case_sensitive": false,
+    "true_actions": [],
+    "false_actions": [
+      {
+        "type": "delay",
+        "ms": 2000
+      },
+      {
+        "type": "left_click",
+        "x": 171,
+        "y": 53
+      }
+    ],
+    "use_full_screen": false,
+    "crop_x": 159,
+    "crop_y": 71,
+    "crop_width": 35,
+    "crop_height": 26,
+    "enabled": false
+  },
+  {
+    "type": "ocr_matcher",
+    "text": "hidden_clicks",
+    "match_mode": "contains",
+    "case_sensitive": false,
+    "true_actions": [],
+    "false_actions": [],
+    "use_full_screen": false,
+    "crop_x": 8,
+    "crop_y": 30,
+    "crop_width": 577,
+    "crop_height": 361
+  }
+]

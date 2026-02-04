@@ -7,6 +7,7 @@ from src.action_types.double_click import DoubleClickActionType
 from src.action_types.end_file_reader import EndFileReaderActionType
 from src.action_types.hotkey import HotkeyActionType
 from src.action_types.image_matcher import ImageMatcherActionType
+from src.action_types.ocr_matcher import OCRMatcherActionType
 
 
 class ActionTypeRegistry:
@@ -24,6 +25,7 @@ class ActionTypeRegistry:
         self.register(EndFileReaderActionType())
         self.register(HotkeyActionType())
         self.register(ImageMatcherActionType())
+        self.register(OCRMatcherActionType())
     
     def register(self, action_type: BaseActionType):
         """Register an action type"""
